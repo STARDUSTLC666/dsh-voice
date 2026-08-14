@@ -1,0 +1,22 @@
+# dsh-voice 组合包补丁：把语音双件套工具插件行插入 profile。
+# 本补丁按 id 覆盖；用户应在自己 profile 的 cordis.patch.yml 里覆盖本行的整个
+# config（见 README 的配置示例）。配置缺失时插件仍会加载：voice_tts 零配置可用，
+# voice_stt 需要 ASR 接口（Groq / OpenAI 兼容）。
+#
+# 示例（用户 profile 的 cordis.patch.yml）：
+#   - id: voice
+#     name: 'dsh-voice'
+#     config:
+#       asrEngine: groq                 # groq | openai | custom（voice_stt 用）
+#       # asrApiKey: gsk_...            # 推荐改用环境变量 DSH_VOICE_ASR_KEY
+#       # asrBaseUrl: https://api.groq.com/openai/v1
+#       asrModel: whisper-large-v3-turbo
+#       # proxyUrl: http://127.0.0.1:7890   # 需要特殊代理访问 ASR/Bing 时启用
+#       ttsVoice: zh-CN-XiaoxiaoNeural
+#
+- insert:
+    - id: voice
+      name: 'dsh-voice'
+      config:
+        asrEngine: groq
+        asrModel: whisper-large-v3-turbo
