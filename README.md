@@ -1,6 +1,8 @@
 [English](README.en.md)
 
-`# dsh-voice
+# dsh-voice
+
+> **你的 agent 会说话了**：edge-tts 微软神经语音免费无限量 + Whisper 转写。
 
 ![npm version](https://img.shields.io/npm/v/dsh-voice?label=npm&color=blue) ![npm downloads](https://img.shields.io/npm/dm/dsh-voice) ![license](https://img.shields.io/npm/l/dsh-voice) ![stars](https://img.shields.io/github/stars/STARDUSTLC666/dsh-voice?style=social)
 
