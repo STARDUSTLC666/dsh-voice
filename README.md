@@ -1,6 +1,9 @@
 [English](README.en.md)
 
-# dsh-voice
+`# dsh-voice
+
+![npm version](https://img.shields.io/npm/v/dsh-voice?label=npm&color=blue) ![npm downloads](https://img.shields.io/npm/dm/dsh-voice) ![license](https://img.shields.io/npm/l/dsh-voice) ![stars](https://img.shields.io/github/stars/STARDUSTLC666/dsh-voice?style=social)
+
 
 DSH（DeepSeek Harness）语音双件套插件：让 agent **会说话、能听懂**。
 
@@ -63,3 +66,4 @@ pnpm test       # 构建 + 31 个测试（含真实合成集成测试）
 ## License
 
 MIT
+
