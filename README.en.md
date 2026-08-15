@@ -2,6 +2,8 @@
 
 # dsh-voice
 
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+
 DSH (DeepSeek Harness) voice plugin pair: let the agent **speak and listen**.
 
 - **voice_tts**: text-to-speech over the **edge-tts protocol** (Microsoft Edge read-aloud service — free, unlimited, 22+ curated voices)
