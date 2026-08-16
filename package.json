@@ -38,7 +38,8 @@
     "tts",
     "stt",
     "whisper",
-    "voice"
+    "voice",
+    "dsh-plugin"
   ],
   "license": "MIT",
   "engines": {
