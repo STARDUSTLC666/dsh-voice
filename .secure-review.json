@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "exclude": [],
+  "ignore": [
+    {
+      "ruleId": "SEC-304",
+      "file": "src/edge-tts.ts",
+      "reason": "edge-tts 公开协议常量，非凭据"
+    },
+    {
+      "ruleId": "SEC-304",
+      "file": "lib/edge-tts.js",
+      "reason": "构建产物中的 edge-tts 公开协议常量"
+    },
+    {
+      "ruleId": "SEC-304",
+      "file": "test/edge-tts.test.mjs",
+      "reason": "测试夹具中的协议向量"
+    }
+  ],
+  "failOn": "high"
+}
