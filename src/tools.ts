@@ -157,6 +157,9 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       if (!isValidVoiceId(voice)) throw new Error('音色 id 不合法：' + voice + '。请用 voice_list 查看常用音色，或使用 zh-CN-XXXNeural 形式的 edge 音色。')
       const rate = optionalString(args, 'rate') ?? cfg.ttsRate
       const pitch = optionalString(args, 'pitch') ?? cfg.ttsPitch
+      for (const [value, label] of [[rate, '语速 rate'], [pitch, '音调 pitch']] as const) {
+        if (!/^[+-]?\d+(\.\d+)?(%|Hz|st)$/.test(value)) throw new Error(label + ' 不合法：' + value + '。合法格式如 +10%、-2Hz、+1st。')
+      }
       const output = resolveOutputPath(optionalString(args, 'output'), 'voice_output.mp3', cfg.overwrite)
       const audio = await (deps.tts ?? synthesizeSpeech)({ text, voice, rate, pitch }, { proxyUrl: cfg.proxyUrl }, timeout)
       writeFileSync(output, audio)

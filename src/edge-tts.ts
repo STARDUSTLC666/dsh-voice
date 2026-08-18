@@ -113,7 +113,7 @@ export async function synthesizeSpeech(options: TtsOptions, deps: TtsDeps = {}, 
       try { socket.close() } catch { /* 忽略 */ }
       reject(new Error('语音合成超时（' + timeoutMs + ' 毫秒无完整音频），请重试或检查网络。'))
     }, timeoutMs)
-    const finish = () => { clearTimeout(timer); resolvePromise() }
+    const finish = () => { clearTimeout(timer); try { socket.close() } catch { /* 忽略 */ } resolvePromise() }
 
     socket.addEventListener('open', () => {
       const config = protocolHeader('speech.config', { 'Content-Type': 'application/json; charset=utf-8' })
