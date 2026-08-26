@@ -15,11 +15,24 @@ DSH（DeepSeek Harness）语音双件套插件：让 agent **会说话、能听�
 - **voice_stt**：语音转文字，走 **OpenAI 兼容 ASR 接口**（Groq / OpenAI / 自定义端点）
 - **voice_list**：音色清单
 
+## 兼容性
+
+在 `@deepseek-ai/dsh@0.1.1-rc.2` 上验证（2026-08-26）。遵循 cordis 组合包补丁模型（`cordis.patch.yml` + `dsh.bundle.patch`），运行时不 import 任何 `@deepseek-ai/*` 内部模块。
+
 ## 安装
 
 ```bash
 dsh plugin --profile web add dsh-voice
 ```
+
+## 卸载
+
+```bash
+dsh plugin --profile web remove dsh-voice
+```
+
+卸载后重启 Web 服务。如需彻底清理，可再手动删除自己 profile `cordis.patch.yml` 中覆盖的插件行。
+
 
 ## 配置
 
@@ -70,4 +83,3 @@ pnpm test       # 构建 + 31 个测试（含真实合成集成测试）
 ## License
 
 MIT
-

@@ -10,11 +10,24 @@ DSH (DeepSeek Harness) voice plugin pair: let the agent **speak and listen**.
 - **voice_stt**: speech-to-text over any **OpenAI-compatible ASR endpoint** (Groq / OpenAI / custom)
 - **voice_list**: voice catalog
 
+## Compatibility
+
+Verified against `@deepseek-ai/dsh@0.1.1-rc.2` on 2026-08-26. Built for the cordis patch-bundle plugin model (`cordis.patch.yml` + `dsh.bundle.patch`). No runtime imports of `@deepseek-ai/*` internals.
+
 ## Installation
 
 ```bash
 dsh plugin --profile web add dsh-voice
 ```
+
+## Uninstall
+
+```bash
+dsh plugin --profile web remove dsh-voice
+```
+
+Then restart the web service. To clean up fully, also remove the plugin entry from your profile `cordis.patch.yml` if you overrode it.
+
 
 ## Configuration
 
