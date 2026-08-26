@@ -11,9 +11,9 @@ writeFileSync(audioFile, Buffer.from([1, 2, 3]))
 
 const cfg = resolveConfig({ asrApiKey: 'test-key', timeoutMs: 5000 })
 
-test('构建 3 个工具且名字正确', () => {
+test('构建 5 个工具且名字正确', () => {
   const names = buildVoiceTools(cfg).map((t) => t.name).sort()
-  assert.deepEqual(names, ['voice_list', 'voice_stt', 'voice_tts'])
+  assert.deepEqual(names, ['voice_health', 'voice_list', 'voice_preview', 'voice_stt', 'voice_tts'])
 })
 
 test('每个工具 schema 是 object JSON Schema，输出含 render', () => {

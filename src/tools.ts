@@ -1,10 +1,10 @@
 /**
- * 三个面向模型的语音工具：voice_tts / voice_stt / voice_list。
+ * 五个面向模型的语音工具：voice_tts / voice_stt / voice_list / voice_preview。
  *
  * @module dsh-voice/tools
  */
-import { readFileSync, writeFileSync } from 'node:fs'
-import { basename, extname, resolve } from 'node:path'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { basename, extname, join, resolve } from 'node:path'
 import { type ResolvedVoiceConfig } from './config.js'
 import { synthesizeSpeech } from './edge-tts.js'
 import { assertAudioFile, resolveOutputPath } from './paths.js'
@@ -95,6 +95,20 @@ const sttSchema = {
   },
   additionalProperties: true,
 }
+
+const previewSchema = {
+  type: 'object',
+  properties: {
+    count: { type: 'integer' },
+    samples: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    failed: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    text: { type: 'string' },
+  },
+  additionalProperties: true,
+}
+
+/** 默认试听文本（中英混合，便于感知发音差异）。 */
+export const DEFAULT_PREVIEW_TEXT = '你好，这是音色试听。Hello, this is a voice preview.'
 
 /** 可注入依赖（测试用假实现）。 */
 export interface VoiceToolDeps {
@@ -215,5 +229,96 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
     timeoutMs: timeout + 10000,
   }
 
-  return [voiceList, voiceTts, voiceStt]
+  const voicePreview: VoiceToolDefinition = {
+    name: 'voice_preview',
+    description: '音色试听：用一段固定试听文本批量生成短样例 MP3，方便挑选音色。voices 为音色 id 数组（可选，缺省 voice_list 前 4 个，最多 8 个）；text 可自定义（≤200 字符）；样例文件写入输出目录（默认工作目录 voice_previews），文件名含音色 id。单个音色失败不阻断其他。',
+    parameters: compileParameters({
+      voices: { type: 'array', items: { type: 'string' }, description: '音色 id 数组（可选，缺省 voice_list 前 4 个，最多 8 个）。' },
+      text: { type: 'string', description: '试听文本（可选，默认中英混合试听句，≤200 字符）。' },
+      outputDir: { type: 'string', description: '输出目录（可选，默认工作目录下 voice_previews）。' },
+    }),
+    output: {
+      schema: previewSchema,
+      render: (_args, value) => {
+        const rec = asRecord(value)
+        const samples = Array.isArray(rec.samples) ? rec.samples : []
+        const failed = Array.isArray(rec.failed) ? rec.failed : []
+        const lines = ['试听样例已生成 ' + samples.length + ' 个（试听文本：' + rec.text + '）：']
+        for (const item of samples) {
+          const s = asRecord(item)
+          lines.push('- ' + s.voice + ' -> ' + s.output)
+        }
+        for (const item of failed) {
+          const f = asRecord(item)
+          lines.push('- ' + f.voice + ' 失败：' + String(f.error ?? ''))
+        }
+        return [{ type: 'text', text: lines.join('\n') }]
+      },
+    },
+    async execute(rawArgs: unknown) {
+      const args = asRecord(rawArgs)
+      const rawVoices = Array.isArray(args.voices)
+        ? args.voices.filter((v): v is string => typeof v === 'string' && v.trim() !== '').map((v) => v.trim())
+        : []
+      const targets = rawVoices.length > 0 ? rawVoices : VOICES.slice(0, 4).map((v) => v.id)
+      if (targets.length > 8) throw new Error('voices 最多 8 个（当前 ' + targets.length + ' 个），试听一次别太多，慢且耗资源。')
+      const text = optionalString(args, 'text') ?? DEFAULT_PREVIEW_TEXT
+      if (text.length > 200) throw new Error('试听文本请控制在 200 字以内（试听要短平快）。')
+      const outDir = resolve(optionalString(args, 'outputDir') ?? 'voice_previews')
+      mkdirSync(outDir, { recursive: true })
+      const samples: Array<Record<string, unknown>> = []
+      const failed: Array<Record<string, unknown>> = []
+      for (const voice of targets) {
+        if (!isValidVoiceId(voice)) {
+          failed.push({ voice, error: '音色 id 不合法（应为 zh-CN-XXXNeural 形式的 edge 音色）' })
+          continue
+        }
+        try {
+          const audio = await (deps.tts ?? synthesizeSpeech)({ text, voice, rate: cfg.ttsRate, pitch: cfg.ttsPitch }, { proxyUrl: cfg.proxyUrl }, timeout)
+          const file = join(outDir, 'voice-preview-' + voice.replace(/[^a-zA-Z0-9-]/g, '_') + '.mp3')
+          writeFileSync(file, audio)
+          samples.push({ voice, output: file, bytes: audio.length })
+        } catch (error) {
+          failed.push({ voice, error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+      return { count: samples.length, samples, failed, text }
+    },
+    timeoutMs: timeout + 10000,
+  }
+
+  const voiceHealth: VoiceToolDefinition = {
+    name: 'voice_health',
+    description: 'dsh-voice 自检：检查 TTS 音色合法性、代理配置与 ASR 引擎/密钥就绪状态（不发起网络请求）。遇到问题时先运行本工具定位。',
+    parameters: compileParameters({}),
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => {
+        const rec = asRecord(value)
+        const checks = Array.isArray(rec.checks) ? rec.checks : []
+        const lines = ['dsh-voice 自检' + (rec.ok === true ? '：正常。' : '：发现问题。')]
+        for (const item of checks) {
+          const c = asRecord(item)
+          lines.push('- ' + c.name + '：' + (c.ok === true ? '✅ ' + String(c.detail ?? '') : '❌ ' + String(c.detail ?? '')))
+        }
+        return [{ type: 'text', text: lines.join('\n') }]
+      },
+    },
+    async execute() {
+      const checks: Array<Record<string, unknown>> = []
+      let ok = true
+      const voiceOk = isValidVoiceId(cfg.ttsVoice)
+      checks.push({ name: 'TTS 音色', ok: voiceOk, detail: voiceOk ? cfg.ttsVoice : '不合法：' + cfg.ttsVoice + '（用 voice_list 查看）' })
+      if (!voiceOk) ok = false
+      checks.push({ name: '特殊代理', ok: true, detail: cfg.proxyUrl !== '' ? '已配置 ' + cfg.proxyUrl : '未配置' })
+      checks.push({ name: 'ASR 引擎', ok: true, detail: cfg.asrEngine })
+      const hasKey = cfg.asrApiKey !== '' || typeof process.env.DSH_VOICE_ASR_KEY === 'string' && process.env.DSH_VOICE_ASR_KEY !== ''
+      checks.push({ name: 'ASR 密钥', ok: hasKey, detail: hasKey ? '已配置' : '未配置：voice_stt 需要 DSH_VOICE_ASR_KEY 环境变量或配置 asrApiKey' })
+      if (!hasKey) ok = false
+      return { ok, plugin: 'dsh-voice', checks }
+    },
+    timeoutMs: 5000,
+  }
+
+  return [voiceList, voiceTts, voiceStt, voicePreview, voiceHealth]
 }

@@ -22,6 +22,6 @@ test('cordis.patch.yml 插入行名为 dsh-voice', () => {
 test('名称与版本', () => {
   const pkg = require('../package.json')
   assert.equal(pkg.name, 'dsh-voice')
-  assert.equal(pkg.version, '0.1.1')
+  assert.equal(pkg.version, '0.3.0')
   assert.ok(pkg.files.includes('README.en.md'))
 })
