@@ -1,5 +1,7 @@
 [中文](README.md)
 
+![npm](https://img.shields.io/npm/v/dsh-voice) ![downloads](https://img.shields.io/npm/dm/dsh-voice) ![license](https://img.shields.io/github/license/STARDUSTLC666/dsh-voice) ![stars](https://img.shields.io/github/stars/STARDUSTLC666/dsh-voice?style=social)
+
 # dsh-voice
 
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
