@@ -217,14 +217,16 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
         language: optionalString(args, 'language'),
         prompt: optionalString(args, 'prompt'),
       }, fetchImpl ?? globalThis.fetch, timeout)
-      let transcriptFile: string | null = null
+      let transcriptFile = ''
       const output = optionalString(args, 'output')
       if (output !== undefined) {
         const target = resolveOutputPath(output, '', cfg.overwrite)
         writeFileSync(target, text, 'utf8')
         transcriptFile = target
       }
-      return { text, model, language: optionalString(args, 'language') ?? null, audio: audioPath, transcriptFile }
+      // The output schema declares these as strings — never return null, or
+      // dsh rejects the whole tool result (issue #1).
+      return { text, model, language: optionalString(args, 'language') ?? '', audio: audioPath, transcriptFile }
     },
     timeoutMs: timeout + 10000,
   }
