@@ -1,6 +1,6 @@
 {
   "name": "dsh-voice",
-  "version": "0.3.2",
+  "version": "0.3.1",
   "description": "DSH 语音双件套插件：voice_tts（edge-tts 协议零成本微软神经语音合成）/ voice_stt（OpenAI 兼容 ASR 语音转文字）/ voice_list（音色列表），原生 WebSocket + 插件级代理。",
   "type": "module",
   "main": "lib/index.js",
@@ -28,13 +28,6 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
-    },
-    "compatibility": {
-      "dshReleases": {
-        "0.1.0-rc.8": "unknown",
-        "0.1.1-rc.1": "unknown",
-        "0.1.1-rc.2": "compatible"
-      }
     }
   },
   "keywords": [
