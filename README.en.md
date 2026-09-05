@@ -74,7 +74,8 @@ voice_list {}
 
 ```bash
 pnpm install
-pnpm test       # build + 31 tests, including a real-synthesis integration test
+pnpm test       # build + offline unit tests with mocked TTS/ASR
+pnpm test:integration  # opt-in real edge-tts request; network and assertion errors fail
 ```
 
 ## License

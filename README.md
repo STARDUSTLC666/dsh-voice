@@ -77,7 +77,8 @@ voice_list {}
 
 ```bash
 pnpm install
-pnpm test       # 构建 + 31 个测试（含真实合成集成测试）
+pnpm test       # 构建 + 离线单元测试（使用模拟的 TTS/ASR）
+pnpm test:integration  # 显式联网，调用真实 edge-tts；网络或断言失败均报错
 ```
 
 ## License
