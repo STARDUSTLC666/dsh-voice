@@ -37,6 +37,8 @@ export interface TtsDeps {
   webSocketFactory?: WebSocketFactory
   nowSeconds?: () => number
   proxyUrl?: string
+  /** 取消信号（可选）；也可通过 synthesizeSpeech 第 4 个参数传入。 */
+  signal?: AbortSignal
 }
 
 /** 最小的 WebSocket 面。 */
@@ -94,7 +96,9 @@ function protocolHeader(path: string, extra: Record<string, string>): string {
  * 合成语音，返回 MP3 字节。
  * @throws 文本为空/超长 / 连接失败 / 超时 / 无音频数据时抛中文错误。
  */
-export async function synthesizeSpeech(options: TtsOptions, deps: TtsDeps = {}, timeoutMs = 30000): Promise<Buffer> {
+export async function synthesizeSpeech(options: TtsOptions, deps: TtsDeps = {}, timeoutMs = 30000, signal?: AbortSignal): Promise<Buffer> {
+  const abortSignal = signal ?? deps.signal
+  if (abortSignal?.aborted === true) throw abortSignal.reason
   if (options.text.trim() === '') throw new Error('要合成的文本为空。')
   if (options.text.length > 5000) throw new Error('文本过长（超过 5000 字符），请分段合成。')
 
@@ -109,11 +113,40 @@ export async function synthesizeSpeech(options: TtsOptions, deps: TtsDeps = {}, 
   const chunks: Buffer[] = []
   let done = false
   await new Promise<void>((resolvePromise, reject) => {
-    const timer = setTimeout(() => {
+    const canListen = typeof abortSignal?.addEventListener === 'function'
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let onAbort = () => { /* 占位，随后立即赋值 */ }
+    // 先结算再关 socket：即使 socket.close() 同步触发 close 事件，取消原因也不会被通用错误覆盖。
+    const fail = (error: unknown) => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      if (canListen) (abortSignal as AbortSignal).removeEventListener('abort', onAbort)
+      reject(error)
+    }
+    const finish = () => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      if (canListen) (abortSignal as AbortSignal).removeEventListener('abort', onAbort)
       try { socket.close() } catch { /* 忽略 */ }
-      reject(new Error('语音合成超时（' + timeoutMs + ' 毫秒无完整音频），请重试或检查网络。'))
+      resolvePromise()
+    }
+    onAbort = () => {
+      const reason = abortSignal?.reason ?? new Error('语音合成已取消。')
+      fail(reason)
+      try { socket.close() } catch { /* 忽略 */ }
+    }
+    timer = setTimeout(() => {
+      fail(new Error('语音合成超时（' + timeoutMs + ' 毫秒无完整音频），请重试或检查网络。'))
+      try { socket.close() } catch { /* 忽略 */ }
     }, timeoutMs)
-    const finish = () => { clearTimeout(timer); try { socket.close() } catch { /* 忽略 */ } resolvePromise() }
+    if (canListen) (abortSignal as AbortSignal).addEventListener('abort', onAbort, { once: true })
+    if (abortSignal?.aborted === true) {
+      onAbort()
+      return
+    }
 
     socket.addEventListener('open', () => {
       const config = protocolHeader('speech.config', { 'Content-Type': 'application/json; charset=utf-8' })
@@ -129,8 +162,7 @@ export async function synthesizeSpeech(options: TtsOptions, deps: TtsDeps = {}, 
         socket.send(config)
         socket.send(ssml)
       } catch (error) {
-        clearTimeout(timer)
-        reject(error instanceof Error ? error : new Error(String(error)))
+        fail(error instanceof Error ? error : new Error(String(error)))
       }
     })
 
@@ -139,8 +171,7 @@ export async function synthesizeSpeech(options: TtsOptions, deps: TtsDeps = {}, 
       if (typeof data === 'string') {
         if (data.includes('Path:turn.end')) {
           if (chunks.length === 0) {
-            clearTimeout(timer)
-            reject(new Error('合成结束但没有收到音频数据（服务端可能拒绝了请求）。'))
+            fail(new Error('合成结束但没有收到音频数据（服务端可能拒绝了请求）。'))
           } else if (!done) {
             done = true
             finish()
@@ -159,18 +190,16 @@ export async function synthesizeSpeech(options: TtsOptions, deps: TtsDeps = {}, 
     })
 
     socket.addEventListener('error', () => {
-      clearTimeout(timer)
-      reject(new Error('edge-tts WebSocket 连接失败。若网络需要特殊代理（梯子），请在 cordis.patch.yml 配置 proxyUrl 后重启。'))
+      fail(new Error('edge-tts WebSocket 连接失败。若网络需要特殊代理（梯子），请在 cordis.patch.yml 配置 proxyUrl 后重启。'))
     })
 
     socket.addEventListener('close', () => {
       if (!done) {
-        clearTimeout(timer)
         if (chunks.length > 0) {
           done = true
           finish()
         } else {
-          reject(new Error('edge-tts 连接在收到音频前关闭。'))
+          fail(new Error('edge-tts 连接在收到音频前关闭。'))
         }
       }
     })

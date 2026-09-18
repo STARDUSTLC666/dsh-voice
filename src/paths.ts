@@ -6,9 +6,9 @@
 import { existsSync, statSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 
-/** 校验音频文件存在且是文件；返回绝对路径。 */
-export function assertAudioFile(input: string): string {
-  const absolute = resolve(input)
+/** 校验音频文件存在且是文件；相对路径按 cwd（会话工作区）解析，返回绝对路径。 */
+export function assertAudioFile(input: string, cwd: string = process.cwd()): string {
+  const absolute = resolve(cwd, input)
   if (!existsSync(absolute) || !statSync(absolute).isFile()) {
     throw new Error('音频文件不存在：' + input)
   }

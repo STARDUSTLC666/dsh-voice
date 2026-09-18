@@ -1,5 +1,5 @@
 /**
- * 五个面向模型的语音工具：voice_tts / voice_stt / voice_list / voice_preview。
+ * 五个面向模型的语音工具：voice_tts / voice_stt / voice_list / voice_preview / voice_health。
  *
  * @module dsh-voice/tools
  */
@@ -39,6 +39,8 @@ function compileParameters(spec: Record<string, any>): { type: 'object'; propert
     const node: Record<string, unknown> = {}
     if (typeof prop?.type === 'string') node.type = prop.type
     if (typeof prop?.description === 'string') node.description = prop.description
+    if (prop?.enum !== undefined) node.enum = prop.enum
+    if (prop?.items !== undefined) node.items = prop.items
     properties[key] = node
   }
   return { type: 'object', properties, ...(required.length > 0 ? { required } : {}) }
@@ -59,9 +61,54 @@ function requiredString(args: Record<string, unknown>, key: string, label: strin
   return value
 }
 
-/** Harness 执行上下文里本插件关心的字段：会话工作区。 */
+/** Harness 执行上下文里本插件关心的字段：取消信号与会话工作区。 */
 interface ToolExecutionContext {
+  /** 本次调用的取消信号：harness 超时/用户取消时触发。 */
+  signal?: AbortSignal
   agent?: { session?: { header?: { cwd?: string } } }
+}
+
+/** 取本次调用的取消信号；取不到就当未提供。 */
+function execSignal(exec: unknown): AbortSignal | undefined {
+  const signal = (exec as ToolExecutionContext | null | undefined)?.signal
+  return signal !== null && typeof signal === 'object' && typeof signal.aborted === 'boolean' ? signal : undefined
+}
+
+/** 已取消则抛出取消原因；作为 await 前后的统一取消检查。 */
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) throw signal.reason
+}
+
+/** 让不认 signal 的实现也能在取消时立即 reject；signal 缺 addEventListener 时只能原样等待。 */
+function raceAbort<T>(value: T | PromiseLike<T>, signal: AbortSignal | undefined): Promise<T> {
+  const promise = Promise.resolve(value)
+  if (signal === undefined || typeof signal.addEventListener !== 'function') return promise
+  if (signal.aborted === true) return Promise.reject(signal.reason)
+  return new Promise<T>((resolvePromise, rejectPromise) => {
+    const onAbort = () => rejectPromise(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (settled) => { signal.removeEventListener('abort', onAbort); resolvePromise(settled) },
+      (error) => { signal.removeEventListener('abort', onAbort); rejectPromise(error) },
+    )
+  })
+}
+
+/** 有界并发：同一时刻最多跑 limit 个任务；取消时停止派发并抛出取消原因。 */
+async function mapLimit<T, R>(items: T[], limit: number, signal: AbortSignal | undefined, worker: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const run = async (): Promise<void> => {
+    for (;;) {
+      throwIfAborted(signal)
+      const index = next
+      next += 1
+      if (index >= items.length) return
+      results[index] = await worker(items[index])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => run()))
+  return results
 }
 
 /** 取本次调用的会话工作区；harness 从不 chdir，取不到时才回退宿主进程 cwd。 */
@@ -127,6 +174,17 @@ const previewSchema = {
 /** 默认试听文本（中英混合，便于感知发音差异）。 */
 export const DEFAULT_PREVIEW_TEXT = '你好，这是音色试听。Hello, this is a voice preview.'
 
+/** voice_preview 同时合成的音色数上限：有界并发，避免 8 个音色串行把最坏等待拖成 8 倍超时。 */
+const PREVIEW_CONCURRENCY = 3
+
+/** voice_preview 单个音色的结果：成功带 output/bytes，失败带 error。 */
+interface PreviewOutcome {
+  voice: string
+  output?: string
+  bytes?: number
+  error?: string
+}
+
 /** 可注入依赖（测试用假实现）。 */
 export interface VoiceToolDeps {
   tts?: typeof synthesizeSpeech
@@ -181,6 +239,8 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       },
     },
     async execute(rawArgs: unknown, exec: unknown) {
+      const signal = execSignal(exec)
+      throwIfAborted(signal)
       const args = asRecord(rawArgs)
       const text = requiredString(args, 'text', '要合成的文本')
       if (text.length > 5000) throw new Error('文本超过 5000 字符，请分段合成。')
@@ -192,7 +252,8 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
         if (!/^[+-]?\d+(\.\d+)?(%|Hz|st)$/.test(value)) throw new Error(label + ' 不合法：' + value + '。合法格式如 +10%、-2Hz、+1st。')
       }
       const output = resolveOutputPath(optionalString(args, 'output'), 'voice_output.mp3', cfg.overwrite, sessionCwd(exec))
-      const audio = await (deps.tts ?? synthesizeSpeech)({ text, voice, rate, pitch }, { proxyUrl: cfg.proxyUrl }, timeout)
+      const audio = await raceAbort((deps.tts ?? synthesizeSpeech)({ text, voice, rate, pitch }, { proxyUrl: cfg.proxyUrl }, timeout, signal), signal)
+      throwIfAborted(signal)
       writeFileWithDir(output, audio)
       return { output, bytes: audio.length, voice, rate, pitch, textLength: text.length }
     },
@@ -204,7 +265,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
     description: '语音转文字：调用 OpenAI 兼容 ASR 接口（默认 Groq whisper-large-v3-turbo；可切 openai/custom）。audio 为音频文件路径（mp3/wav/m4a/ogg/flac，≤25MB）；language/prompt 可选；output 可把转写文本写成 .txt。密钥用环境变量 DSH_VOICE_ASR_KEY 或配置 asrApiKey。',
     parameters: compileParameters({
       audio: { type: 'string', required: true, description: '音频文件路径（必填）。' },
-      engine: { type: 'string', description: '引擎：groq / openai / custom（可选，默认配置值）。' },
+      engine: { type: 'string', enum: ['groq', 'openai', 'custom'], description: '引擎：groq / openai / custom（可选，默认配置值）。' },
       model: { type: 'string', description: '模型名（可选，覆盖配置）。' },
       language: { type: 'string', description: '语言提示，如 zh（可选）。' },
       prompt: { type: 'string', description: '提示词（专有名词/术语纠偏，可选）。' },
@@ -218,8 +279,10 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       },
     },
     async execute(rawArgs: unknown, exec: unknown) {
+      const signal = execSignal(exec)
+      throwIfAborted(signal)
       const args = asRecord(rawArgs)
-      const audioPath = assertAudioFile(requiredString(args, 'audio', '音频文件'))
+      const audioPath = assertAudioFile(requiredString(args, 'audio', '音频文件'), sessionCwd(exec))
       assertAudioSize(statSync(audioPath).size)
       const engine = optionalString(args, 'engine') ?? cfg.asrEngine
       let baseUrl: string
@@ -228,13 +291,14 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       else if (engine === 'custom') { baseUrl = cfg.asrBaseUrl; model = optionalString(args, 'model') ?? cfg.asrModel }
       else if (engine === 'groq') { baseUrl = 'https://api.groq.com/openai/v1'; model = optionalString(args, 'model') ?? (cfg.asrModel !== '' && cfg.asrEngine === 'groq' ? cfg.asrModel : 'whisper-large-v3-turbo') }
       else throw new Error('engine 必须是 groq / openai / custom 之一（当前：' + engine + '）。')
-      const { text } = await (deps.stt ?? transcribe)(baseUrl, cfg.asrApiKey, {
+      const { text } = await raceAbort((deps.stt ?? transcribe)(baseUrl, cfg.asrApiKey, {
         audio: readFileSync(audioPath),
         filename: basename(audioPath),
         model,
         language: optionalString(args, 'language'),
         prompt: optionalString(args, 'prompt'),
-      }, fetchImpl ?? globalThis.fetch, timeout)
+      }, fetchImpl ?? globalThis.fetch, timeout, signal), signal)
+      throwIfAborted(signal)
       let transcriptFile = ''
       const output = optionalString(args, 'output')
       if (output !== undefined) {
@@ -276,6 +340,8 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       },
     },
     async execute(rawArgs: unknown, exec: unknown) {
+      const signal = execSignal(exec)
+      throwIfAborted(signal)
       const args = asRecord(rawArgs)
       const rawVoices = Array.isArray(args.voices)
         ? args.voices.filter((v): v is string => typeof v === 'string' && v.trim() !== '').map((v) => v.trim())
@@ -286,21 +352,27 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       if (text.length > 200) throw new Error('试听文本请控制在 200 字以内（试听要短平快）。')
       const outDir = resolve(sessionCwd(exec), optionalString(args, 'outputDir') ?? 'voice_previews')
       mkdirSync(outDir, { recursive: true })
-      const samples: Array<Record<string, unknown>> = []
-      const failed: Array<Record<string, unknown>> = []
-      for (const voice of targets) {
+      const outcomes = await mapLimit<string, PreviewOutcome>(targets, PREVIEW_CONCURRENCY, signal, async (voice) => {
+        throwIfAborted(signal)
         if (!isValidVoiceId(voice)) {
-          failed.push({ voice, error: '音色 id 不合法（应为 zh-CN-XXXNeural 形式的 edge 音色）' })
-          continue
+          return { voice, error: '音色 id 不合法（应为 zh-CN-XXXNeural 形式的 edge 音色）' }
         }
         try {
-          const audio = await (deps.tts ?? synthesizeSpeech)({ text, voice, rate: cfg.ttsRate, pitch: cfg.ttsPitch }, { proxyUrl: cfg.proxyUrl }, timeout)
+          const audio = await raceAbort((deps.tts ?? synthesizeSpeech)({ text, voice, rate: cfg.ttsRate, pitch: cfg.ttsPitch }, { proxyUrl: cfg.proxyUrl }, timeout, signal), signal)
+          throwIfAborted(signal)
           const file = join(outDir, 'voice-preview-' + voice.replace(/[^a-zA-Z0-9-]/g, '_') + '.mp3')
           writeFileSync(file, audio)
-          samples.push({ voice, output: file, bytes: audio.length })
+          return { voice, output: file, bytes: audio.length }
         } catch (error) {
-          failed.push({ voice, error: error instanceof Error ? error.message : String(error) })
+          throwIfAborted(signal)
+          return { voice, error: error instanceof Error ? error.message : String(error) }
         }
+      })
+      const samples: Array<Record<string, unknown>> = []
+      const failed: Array<Record<string, unknown>> = []
+      for (const outcome of outcomes) {
+        if (outcome.error !== undefined) failed.push({ voice: outcome.voice, error: outcome.error })
+        else samples.push({ voice: outcome.voice, output: outcome.output, bytes: outcome.bytes })
       }
       return { count: samples.length, samples, failed, text }
     },
@@ -309,7 +381,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
 
   const voiceHealth: VoiceToolDefinition = {
     name: 'voice_health',
-    description: 'dsh-voice 自检：检查 TTS 音色合法性、代理配置与 ASR 引擎/密钥就绪状态（不发起网络请求）。遇到问题时先运行本工具定位。',
+    description: 'dsh-voice 自检：检查 TTS 音色合法性、代理配置与 ASR 引擎/接口地址/密钥就绪状态（不发起网络请求）。遇到问题时先运行本工具定位。',
     parameters: compileParameters({}),
     output: {
       schema: { type: 'object', additionalProperties: true },
@@ -332,6 +404,9 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       if (!voiceOk) ok = false
       checks.push({ name: '特殊代理', ok: true, detail: cfg.proxyUrl !== '' ? '已配置 ' + cfg.proxyUrl : '未配置' })
       checks.push({ name: 'ASR 引擎', ok: true, detail: cfg.asrEngine })
+      const baseUrlOk = cfg.asrBaseUrl !== ''
+      checks.push({ name: 'ASR 接口地址', ok: baseUrlOk, detail: baseUrlOk ? cfg.asrBaseUrl : '未配置：asrEngine=custom 时必须提供 asrBaseUrl。' })
+      if (!baseUrlOk) ok = false
       const hasKey = cfg.asrApiKey !== '' || typeof process.env.DSH_VOICE_ASR_KEY === 'string' && process.env.DSH_VOICE_ASR_KEY !== ''
       checks.push({ name: 'ASR 密钥', ok: hasKey, detail: hasKey ? '已配置' : '未配置：voice_stt 需要 DSH_VOICE_ASR_KEY 环境变量或配置 asrApiKey' })
       if (!hasKey) ok = false

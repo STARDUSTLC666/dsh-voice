@@ -5,6 +5,8 @@ export interface SttOptions {
     model: string;
     language?: string;
     prompt?: string;
+    /** 取消信号（可选）；也可通过 transcribe 第 6 个参数传入。 */
+    signal?: AbortSignal;
 }
 /** 字节数超过 25MB 时抛错：调用方可在读文件前先按 statSync 大小快速拒绝，避免白读整文件。 */
 export declare function assertAudioSize(bytes: number): void;
@@ -16,7 +18,7 @@ export declare function assertAudioSize(bytes: number): void;
 export type SttFetch = typeof fetch & {
     FormData?: typeof FormData;
 };
-export declare function transcribe(baseUrl: string, apiKey: string, options: SttOptions, fetchImpl?: SttFetch, timeoutMs?: number): Promise<{
+export declare function transcribe(baseUrl: string, apiKey: string, options: SttOptions, fetchImpl?: SttFetch, timeoutMs?: number, signal?: AbortSignal): Promise<{
     text: string;
     model: string;
 }>;

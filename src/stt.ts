@@ -12,6 +12,8 @@ export interface SttOptions {
   model: string
   language?: string
   prompt?: string
+  /** 取消信号（可选）；也可通过 transcribe 第 6 个参数传入。 */
+  signal?: AbortSignal
 }
 
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024
@@ -28,7 +30,29 @@ export function assertAudioSize(bytes: number): void {
 /** 传给 transcribe 的 fetch：可以像代理那样一并带上自己的 FormData/Blob 构造器。 */
 export type SttFetch = typeof fetch & { FormData?: typeof FormData }
 
-export async function transcribe(baseUrl: string, apiKey: string, options: SttOptions, fetchImpl: SttFetch = globalThis.fetch, timeoutMs = 120000): Promise<{ text: string; model: string }> {
+/** 已取消则抛出取消原因；作为 await 前后的统一取消检查。 */
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) throw signal.reason
+}
+
+/** 让不认 signal 的 fetch 实现也能在外部取消时立即 reject。 */
+function raceAbort<T>(value: T | PromiseLike<T>, signal: AbortSignal | undefined): Promise<T> {
+  const promise = Promise.resolve(value)
+  if (signal === undefined || typeof signal.addEventListener !== 'function') return promise
+  if (signal.aborted === true) return Promise.reject(signal.reason)
+  return new Promise<T>((resolvePromise, rejectPromise) => {
+    const onAbort = () => rejectPromise(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (settled) => { signal.removeEventListener('abort', onAbort); resolvePromise(settled) },
+      (error) => { signal.removeEventListener('abort', onAbort); rejectPromise(error) },
+    )
+  })
+}
+
+export async function transcribe(baseUrl: string, apiKey: string, options: SttOptions, fetchImpl: SttFetch = globalThis.fetch, timeoutMs = 120000, signal?: AbortSignal): Promise<{ text: string; model: string }> {
+  const abortSignal = signal ?? options.signal
+  throwIfAborted(abortSignal)
   if (apiKey === '') throw new Error('未配置 ASR 密钥：请设置环境变量 DSH_VOICE_ASR_KEY，或在 cordis.patch.yml 的 asrApiKey 配置后重启。')
   if (baseUrl === '') throw new Error('未配置 ASR 接口地址（asrEngine=custom 时必须提供 asrBaseUrl）。')
   if (options.audio.length === 0) throw new Error('音频文件为空。')
@@ -45,15 +69,18 @@ export async function transcribe(baseUrl: string, apiKey: string, options: SttOp
   if (options.language !== undefined && options.language !== '') form.append('language', options.language)
   if (options.prompt !== undefined && options.prompt !== '') form.append('prompt', options.prompt)
 
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  const requestSignal = abortSignal === undefined ? timeoutSignal : AbortSignal.any([timeoutSignal, abortSignal])
   let response: Response
   try {
-    response = await fetchImpl(baseUrl + '/audio/transcriptions', {
+    response = await raceAbort(fetchImpl(baseUrl + '/audio/transcriptions', {
       method: 'POST',
       headers: { authorization: 'Bearer ' + apiKey },
       body: form,
-      signal: AbortSignal.timeout(timeoutMs),
-    })
+      signal: requestSignal,
+    }), abortSignal)
   } catch (error) {
+    throwIfAborted(abortSignal)
     throw new Error('ASR 请求失败：' + (error instanceof Error ? error.message : String(error)) + '。若接口需要特殊代理（梯子），请在 cordis.patch.yml 配置 proxyUrl 后重启。')
   }
   if (!response.ok) {

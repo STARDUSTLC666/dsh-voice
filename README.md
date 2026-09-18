@@ -14,6 +14,8 @@ DSH（DeepSeek Harness）语音双件套插件：让 agent **会说话、能听�
 - **voice_tts**：文字转语音，走 **edge-tts 协议**（微软 Edge 朗读服务，免费无限量，22+ 常用音色）
 - **voice_stt**：语音转文字，走 **OpenAI 兼容 ASR 接口**（Groq / OpenAI / 自定义端点）
 - **voice_list**：音色清单
+- **voice_preview**：音色试听，用一段样例文本批量生成短 MP3，挑音色不用盲选
+- **voice_health**：配置自检，体检 TTS 音色 / ASR 密钥 / 接口地址 / 代理（不联网）
 
 ## 兼容性
 
@@ -56,6 +58,8 @@ dsh plugin --profile web remove dsh-voice
 | `voice_tts` | 文字合成 MP3（免费） | `text` 必填；`voice`/`rate`/`pitch`/`output` 可选 |
 | `voice_stt` | 音频转文字 | `audio` 必填；`engine`/`model`/`language`/`prompt`/`output` 可选 |
 | `voice_list` | 常用音色清单 | 无 |
+| `voice_preview` | 音色试听：批量生成短样例 MP3 | `voices`（≤8 个）/ `text` / `outputDir` 可选 |
+| `voice_health` | 配置自检（不联网） | 无 |
 
 ### 示例
 
@@ -64,6 +68,8 @@ voice_tts { text: 今天的 AI 早报来了 }                    # 晓晓女声�
 voice_tts { text: hello, voice: en-US-AriaNeural }        # 英文女声
 voice_stt { audio: E:\audio\meeting.mp3, language: zh } # 转写会议录音
 voice_list {}
+voice_preview { voices: [zh-CN-XiaoxiaoNeural, en-US-AriaNeural] } # 生成两个试听样例
+voice_health {}                                          # 自检 TTS / ASR / 代理配置
 ```
 
 ## 硬核细节

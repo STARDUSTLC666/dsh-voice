@@ -10,6 +10,8 @@ export interface TtsDeps {
     webSocketFactory?: WebSocketFactory;
     nowSeconds?: () => number;
     proxyUrl?: string;
+    /** 取消信号（可选）；也可通过 synthesizeSpeech 第 4 个参数传入。 */
+    signal?: AbortSignal;
 }
 /** 最小的 WebSocket 面。 */
 export interface WebSocketLike {
@@ -33,4 +35,4 @@ export declare function buildSsml(options: TtsOptions): string;
  * 合成语音，返回 MP3 字节。
  * @throws 文本为空/超长 / 连接失败 / 超时 / 无音频数据时抛中文错误。
  */
-export declare function synthesizeSpeech(options: TtsOptions, deps?: TtsDeps, timeoutMs?: number): Promise<Buffer>;
+export declare function synthesizeSpeech(options: TtsOptions, deps?: TtsDeps, timeoutMs?: number, signal?: AbortSignal): Promise<Buffer>;

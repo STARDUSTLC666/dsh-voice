@@ -32,6 +32,7 @@ export interface ResolvedVoiceConfig {
 /** ASR 密钥：配置优先，其次环境变量 DSH_VOICE_ASR_KEY。 */
 export declare function resolveAsrApiKey(config: VoiceConfig | undefined, env?: NodeJS.ProcessEnv): string;
 /**
- * 解析并校验配置。
+ * 解析并校验配置：非法字段逐项回退到默认值，其余字段照常生效。
+ * @param onWarning 非法字段的告警回调，默认打到 console.warn。
  */
-export declare function resolveConfig(config: VoiceConfig | undefined | null): ResolvedVoiceConfig;
+export declare function resolveConfig(config: VoiceConfig | undefined | null, onWarning?: (message: string) => void): ResolvedVoiceConfig;

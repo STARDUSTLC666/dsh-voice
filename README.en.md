@@ -11,6 +11,8 @@ DSH (DeepSeek Harness) voice plugin pair: let the agent **speak and listen**.
 - **voice_tts**: text-to-speech over the **edge-tts protocol** (Microsoft Edge read-aloud service — free, unlimited, 22+ curated voices)
 - **voice_stt**: speech-to-text over any **OpenAI-compatible ASR endpoint** (Groq / OpenAI / custom)
 - **voice_list**: voice catalog
+- **voice_preview**: batch-generate short preview MP3s to pick a voice by ear
+- **voice_health**: offline self-check of TTS voice / ASR key / endpoint / proxy
 
 ## Compatibility
 
@@ -53,6 +55,8 @@ Then restart the web service. To clean up fully, also remove the plugin entry fr
 | `voice_tts` | Synthesize MP3 from text (free) | `text` required; `voice`/`rate`/`pitch`/`output` optional |
 | `voice_stt` | Transcribe audio to text | `audio` required; `engine`/`model`/`language`/`prompt`/`output` optional |
 | `voice_list` | Curated voice catalog | none |
+| `voice_preview` | Batch-generate short preview MP3s | optional `voices` (≤8) / `text` / `outputDir` |
+| `voice_health` | Offline config self-check | none |
 
 ### Examples
 
@@ -61,6 +65,8 @@ voice_tts { text: hello world }                              # outputs voice_out
 voice_tts { text: hello, voice: en-US-AriaNeural }           # English female voice
 voice_stt { audio: E:\audio\meeting.mp3, language: zh }     # transcribe a recording
 voice_list {}
+voice_preview { voices: [zh-CN-XiaoxiaoNeural, en-US-AriaNeural] } # generate two preview samples
+voice_health {}                                              # self-check TTS / ASR / proxy config
 ```
 
 ## Under the hood
