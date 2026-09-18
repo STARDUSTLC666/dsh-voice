@@ -20,13 +20,20 @@ const MAX_AUDIO_BYTES = 25 * 1024 * 1024
  * 调用 OpenAI 兼容 ASR 接口转写音频。
  * @throws 缺密钥 / 文件过大 / HTTP 错误 / 无文本时抛中文错误。
  */
-export async function transcribe(baseUrl: string, apiKey: string, options: SttOptions, fetchImpl: typeof fetch = globalThis.fetch, timeoutMs = 120000): Promise<{ text: string; model: string }> {
+/** 传给 transcribe 的 fetch：可以像代理那样一并带上自己的 FormData/Blob 构造器。 */
+export type SttFetch = typeof fetch & { FormData?: typeof FormData }
+
+export async function transcribe(baseUrl: string, apiKey: string, options: SttOptions, fetchImpl: SttFetch = globalThis.fetch, timeoutMs = 120000): Promise<{ text: string; model: string }> {
   if (apiKey === '') throw new Error('未配置 ASR 密钥：请设置环境变量 DSH_VOICE_ASR_KEY，或在 cordis.patch.yml 的 asrApiKey 配置后重启。')
   if (baseUrl === '') throw new Error('未配置 ASR 接口地址（asrEngine=custom 时必须提供 asrBaseUrl）。')
   if (options.audio.length === 0) throw new Error('音频文件为空。')
   if (options.audio.length > MAX_AUDIO_BYTES) throw new Error('音频超过 25MB 上限（ASR 接口限制），请先用 ffmpeg 压缩。')
 
-  const form = new FormData()
+  // 代理 fetch（undici）只认它自己那份 FormData：喂 Node 全局 FormData 会被当成普通
+  // 对象序列化成 "[object FormData]"（content-type: text/plain），所以优先用调用方 fetch
+  // 附带的构造器。文件部分继续用全局 Blob —— 实测 undici 的 FormData 收它并输出真 multipart。
+  const FormDataImpl = fetchImpl.FormData ?? FormData
+  const form = new FormDataImpl()
   const mime = mimeOf(options.filename)
   form.append('file', new Blob([options.audio], { type: mime }), options.filename)
   form.append('model', options.model)
