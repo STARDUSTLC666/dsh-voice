@@ -233,12 +233,14 @@ test('voice_stt：相对 audio 按 session.header.cwd 解析并读到文件', as
 
 test('README / package.json / 插件入口注释覆盖全部 5 个注册工具', () => {
   const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'))
+  // 仓库约定：description 是一句话、不罗列工具名（清单在 README）——所以这里反过来断言它不含工具名。
+  assert.ok(typeof pkg.description === 'string' && pkg.description.trim() !== '', 'package.json 描述不能为空')
   for (const name of ['voice_tts', 'voice_stt', 'voice_list', 'voice_preview', 'voice_health']) {
-    assert.ok(pkg.description.includes(name), 'package.json description 缺少 ' + name)
+    assert.ok(!pkg.description.includes(name), 'package.json 描述不应罗列工具名：' + name)
   }
   for (const file of ['README.md', 'README.en.md']) {
     const text = readFileSync(join(here, '..', file), 'utf8')
-    for (const name of ['voice_preview', 'voice_health']) {
+    for (const name of ['voice_tts', 'voice_stt', 'voice_list', 'voice_preview', 'voice_health']) {
       assert.ok(text.includes(name), file + ' 缺少 ' + name)
     }
   }

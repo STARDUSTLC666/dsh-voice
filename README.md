@@ -90,3 +90,7 @@ pnpm test:integration  # 显式联网，调用真实 edge-tts；网络或断言�
 ## License
 
 MIT
+
+## 版本记录
+
+- **0.3.4（2026-09-18）**：修复代理路径 STT 上传 `[object FormData]`、25MB 校验在读入之后、输出目录不存在白烧一次合成、默认输出落宿主 cwd；`exec.signal` 全程透传、preview 改 3 路并发。测试 55 项。

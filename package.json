@@ -1,6 +1,6 @@
 {
   "name": "dsh-voice",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "DSH 语音插件：edge-tts 微软神经语音合成（免费、无需密钥）+ OpenAI 兼容语音转文字，支持插件级代理。",
   "type": "module",
   "main": "lib/index.js",
