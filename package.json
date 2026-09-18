@@ -1,7 +1,7 @@
 {
   "name": "dsh-voice",
   "version": "0.3.3",
-  "description": "DSH 语音工具集插件：voice_tts（edge-tts 协议零成本微软神经语音合成）/ voice_stt（OpenAI 兼容 ASR 语音转文字）/ voice_list（音色列表）/ voice_preview（批量音色试听）/ voice_health（配置自检），原生 WebSocket + 插件级代理。",
+  "description": "DSH 语音插件：edge-tts 微软神经语音合成（免费、无需密钥）+ OpenAI 兼容语音转文字，支持插件级代理。",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
