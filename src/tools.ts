@@ -3,13 +3,13 @@
  *
  * @module dsh-voice/tools
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { basename, extname, join, resolve } from 'node:path'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 import { type ResolvedVoiceConfig } from './config.js'
 import { synthesizeSpeech } from './edge-tts.js'
 import { assertAudioFile, resolveOutputPath } from './paths.js'
 import { createProxyFetch } from './proxy-fetch.js'
-import { transcribe } from './stt.js'
+import { assertAudioSize, transcribe } from './stt.js'
 import { isValidVoiceId, VOICES } from './voices.js'
 
 /** 模型可见的内容块。 */
@@ -57,6 +57,23 @@ function requiredString(args: Record<string, unknown>, key: string, label: strin
   const value = optionalString(args, key)
   if (value === undefined) throw new Error(label + '（参数 ' + key + '）为必填，请提供非空字符串。')
   return value
+}
+
+/** Harness 执行上下文里本插件关心的字段：会话工作区。 */
+interface ToolExecutionContext {
+  agent?: { session?: { header?: { cwd?: string } } }
+}
+
+/** 取本次调用的会话工作区；harness 从不 chdir，取不到时才回退宿主进程 cwd。 */
+function sessionCwd(exec: unknown): string {
+  const cwd = (exec as ToolExecutionContext | null | undefined)?.agent?.session?.header?.cwd
+  return typeof cwd === 'string' && cwd.trim() !== '' ? cwd : process.cwd()
+}
+
+/** 写文件前先建父目录，避免合成/转写完成后才因 ENOENT 白烧一次接口调用。 */
+function writeFileWithDir(target: string, data: string | Buffer): void {
+  mkdirSync(dirname(target), { recursive: true })
+  writeFileSync(target, data)
 }
 
 const voiceItemSchema = {
@@ -154,7 +171,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       voice: { type: 'string', description: '音色 id（可选，默认配置的 ttsVoice）。' },
       rate: { type: 'string', description: '语速，如 +20% 或 -10%（可选）。' },
       pitch: { type: 'string', description: '音调，如 +2Hz 或 -1Hz（可选）。' },
-      output: { type: 'string', description: '输出 MP3 路径（可选）。' },
+      output: { type: 'string', description: '输出 MP3 路径（可选，相对路径按会话工作目录解析）。' },
     }),
     output: {
       schema: ttsSchema,
@@ -163,7 +180,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
         return [{ type: 'text', text: '语音合成完成：' + rec.output + '（' + rec.bytes + ' 字节，音色 ' + rec.voice + '）' }]
       },
     },
-    async execute(rawArgs: unknown) {
+    async execute(rawArgs: unknown, exec: unknown) {
       const args = asRecord(rawArgs)
       const text = requiredString(args, 'text', '要合成的文本')
       if (text.length > 5000) throw new Error('文本超过 5000 字符，请分段合成。')
@@ -174,9 +191,9 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       for (const [value, label] of [[rate, '语速 rate'], [pitch, '音调 pitch']] as const) {
         if (!/^[+-]?\d+(\.\d+)?(%|Hz|st)$/.test(value)) throw new Error(label + ' 不合法：' + value + '。合法格式如 +10%、-2Hz、+1st。')
       }
-      const output = resolveOutputPath(optionalString(args, 'output'), 'voice_output.mp3', cfg.overwrite)
+      const output = resolveOutputPath(optionalString(args, 'output'), 'voice_output.mp3', cfg.overwrite, sessionCwd(exec))
       const audio = await (deps.tts ?? synthesizeSpeech)({ text, voice, rate, pitch }, { proxyUrl: cfg.proxyUrl }, timeout)
-      writeFileSync(output, audio)
+      writeFileWithDir(output, audio)
       return { output, bytes: audio.length, voice, rate, pitch, textLength: text.length }
     },
     timeoutMs: timeout + 10000,
@@ -191,7 +208,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       model: { type: 'string', description: '模型名（可选，覆盖配置）。' },
       language: { type: 'string', description: '语言提示，如 zh（可选）。' },
       prompt: { type: 'string', description: '提示词（专有名词/术语纠偏，可选）。' },
-      output: { type: 'string', description: '把转写文本写成 .txt 的路径（可选）。' },
+      output: { type: 'string', description: '把转写文本写成 .txt 的路径（可选，相对路径按会话工作目录解析）。' },
     }),
     output: {
       schema: sttSchema,
@@ -200,9 +217,10 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
         return [{ type: 'text', text: '转写完成（模型 ' + rec.model + '）：' + rec.text }]
       },
     },
-    async execute(rawArgs: unknown) {
+    async execute(rawArgs: unknown, exec: unknown) {
       const args = asRecord(rawArgs)
       const audioPath = assertAudioFile(requiredString(args, 'audio', '音频文件'))
+      assertAudioSize(statSync(audioPath).size)
       const engine = optionalString(args, 'engine') ?? cfg.asrEngine
       let baseUrl: string
       let model: string
@@ -220,8 +238,8 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       let transcriptFile = ''
       const output = optionalString(args, 'output')
       if (output !== undefined) {
-        const target = resolveOutputPath(output, '', cfg.overwrite)
-        writeFileSync(target, text, 'utf8')
+        const target = resolveOutputPath(output, '', cfg.overwrite, sessionCwd(exec))
+        writeFileWithDir(target, text)
         transcriptFile = target
       }
       // The output schema declares these as strings — never return null, or
@@ -233,11 +251,11 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
 
   const voicePreview: VoiceToolDefinition = {
     name: 'voice_preview',
-    description: '音色试听：用一段固定试听文本批量生成短样例 MP3，方便挑选音色。voices 为音色 id 数组（可选，缺省 voice_list 前 4 个，最多 8 个）；text 可自定义（≤200 字符）；样例文件写入输出目录（默认工作目录 voice_previews），文件名含音色 id。单个音色失败不阻断其他。',
+    description: '音色试听：用一段固定试听文本批量生成短样例 MP3，方便挑选音色。voices 为音色 id 数组（可选，缺省 voice_list 前 4 个，最多 8 个）；text 可自定义（≤200 字符）；样例文件写入输出目录（默认会话工作目录 voice_previews），文件名含音色 id。单个音色失败不阻断其他。',
     parameters: compileParameters({
       voices: { type: 'array', items: { type: 'string' }, description: '音色 id 数组（可选，缺省 voice_list 前 4 个，最多 8 个）。' },
       text: { type: 'string', description: '试听文本（可选，默认中英混合试听句，≤200 字符）。' },
-      outputDir: { type: 'string', description: '输出目录（可选，默认工作目录下 voice_previews）。' },
+      outputDir: { type: 'string', description: '输出目录（可选，默认会话工作目录下 voice_previews）。' },
     }),
     output: {
       schema: previewSchema,
@@ -257,7 +275,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
         return [{ type: 'text', text: lines.join('\n') }]
       },
     },
-    async execute(rawArgs: unknown) {
+    async execute(rawArgs: unknown, exec: unknown) {
       const args = asRecord(rawArgs)
       const rawVoices = Array.isArray(args.voices)
         ? args.voices.filter((v): v is string => typeof v === 'string' && v.trim() !== '').map((v) => v.trim())
@@ -266,7 +284,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       if (targets.length > 8) throw new Error('voices 最多 8 个（当前 ' + targets.length + ' 个），试听一次别太多，慢且耗资源。')
       const text = optionalString(args, 'text') ?? DEFAULT_PREVIEW_TEXT
       if (text.length > 200) throw new Error('试听文本请控制在 200 字以内（试听要短平快）。')
-      const outDir = resolve(optionalString(args, 'outputDir') ?? 'voice_previews')
+      const outDir = resolve(sessionCwd(exec), optionalString(args, 'outputDir') ?? 'voice_previews')
       mkdirSync(outDir, { recursive: true })
       const samples: Array<Record<string, unknown>> = []
       const failed: Array<Record<string, unknown>> = []

@@ -15,9 +15,9 @@ export function assertAudioFile(input: string): string {
   return absolute
 }
 
-/** 决定输出路径：缺省放在当前工作目录，同名自动加 _1/_2 序号。 */
-export function resolveOutputPath(explicit: string | undefined, defaultName: string, overwrite: boolean): string {
-  let target = explicit !== undefined && explicit.trim() !== '' ? resolve(explicit.trim()) : resolve(process.cwd(), defaultName)
+/** 决定输出路径：缺省放在会话工作目录（缺省回退宿主 cwd），同名自动加 _1/_2 序号。 */
+export function resolveOutputPath(explicit: string | undefined, defaultName: string, overwrite: boolean, cwd: string = process.cwd()): string {
+  let target = explicit !== undefined && explicit.trim() !== '' ? resolve(cwd, explicit.trim()) : resolve(cwd, defaultName)
   if (overwrite || !existsSync(target)) return target
   const directory = dirname(target)
   const base = basename(target, extname(target))

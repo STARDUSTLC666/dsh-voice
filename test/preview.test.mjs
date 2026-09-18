@@ -60,4 +60,16 @@ test('voice_preview 渲染含样例路径与失败原因', async () => {
   assert.match(blocks[0].text, /bad 失败：nope/)
 })
 
+test('voice_preview：缺省输出目录落在 session.header.cwd', async () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'dsh-voice-preview-session-'))
+  const tts = fakeTts()
+  const preview = buildVoiceTools(cfg, { tts }).find((t) => t.name === 'voice_preview')
+  const value = await preview.execute({ voices: ['zh-CN-XiaoxiaoNeural'] }, { agent: { session: { header: { cwd: sessionDir } } } })
+  assert.equal(value.count, 1)
+  assert.equal(value.failed.length, 0)
+  assert.equal(value.samples[0].output, join(sessionDir, 'voice_previews', 'voice-preview-zh-CN-XiaoxiaoNeural.mp3'))
+  assert.ok(existsSync(value.samples[0].output), '缺省试听样例应落在会话工作区')
+  rmSync(sessionDir, { recursive: true, force: true })
+})
+
 test('清理', () => { rmSync(dir, { recursive: true, force: true }) })

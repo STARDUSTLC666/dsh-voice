@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync, truncateSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildVoiceTools, resolveConfig } from '../lib/index.js'
@@ -68,6 +68,50 @@ test('execute 返回值可 JSON 序列化', async () => {
   const list = buildVoiceTools(cfg).find((t) => t.name === 'voice_list')
   const value = await list.execute({})
   assert.deepEqual(JSON.parse(JSON.stringify(value)), value)
+})
+
+test('voice_stt：超过 25MB 的稀疏文件在读入前快速失败', async () => {
+  const bigDir = mkdtempSync(join(tmpdir(), 'dsh-voice-big-'))
+  const bigAudio = join(bigDir, 'big.mp3')
+  writeFileSync(bigAudio, '')
+  truncateSync(bigAudio, 25 * 1024 * 1024 + 1) // 稀疏文件：不占磁盘，但 size 超限
+  let called = false
+  const stt = buildVoiceTools(cfg, { stt: async () => { called = true; return { text: '不应到达', model: 'm' } } }).find((t) => t.name === 'voice_stt')
+  const startedAt = Date.now()
+  await assert.rejects(() => stt.execute({ audio: bigAudio }), /音频超过 25MB/)
+  assert.equal(called, false, '超限文件不应进入转写，更不应被整文件读入内存')
+  assert.ok(Date.now() - startedAt < 2000, '应在 statSync 后立即失败')
+  rmSync(bigDir, { recursive: true, force: true })
+})
+
+test('voice_tts：output 指向不存在的新目录时自动建目录', async () => {
+  const tts = buildVoiceTools(cfg, { tts: async () => Buffer.from('MP3DATA') }).find((t) => t.name === 'voice_tts')
+  const output = join(dir, 'brand-new', 'nested', 'voice.mp3')
+  const value = await tts.execute({ text: '你好', output })
+  assert.equal(value.output, output)
+  assert.ok(existsSync(output), '应写入并创建缺失目录')
+  assert.equal(readFileSync(output, 'utf8'), 'MP3DATA')
+})
+
+test('voice_stt：output 指向不存在的新目录时自动建目录', async () => {
+  const stt = buildVoiceTools(cfg, { stt: async (_baseUrl, _apiKey, options) => ({ text: '转写结果', model: options.model }) }).find((t) => t.name === 'voice_stt')
+  const output = join(dir, 'stt-new', 'nested', 'transcript.txt')
+  const value = await stt.execute({ audio: audioFile, output })
+  assert.equal(value.transcriptFile, output)
+  assert.equal(readFileSync(output, 'utf8'), '转写结果')
+})
+
+test('voice_tts：默认与相对输出落在 session.header.cwd 而不是宿主 cwd', async () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'dsh-voice-session-'))
+  const exec = { agent: { session: { header: { cwd: sessionDir } } } }
+  const tts = buildVoiceTools(cfg, { tts: async () => Buffer.from('MP3DATA') }).find((t) => t.name === 'voice_tts')
+  const value = await tts.execute({ text: '你好世界' }, exec)
+  assert.equal(value.output, join(sessionDir, 'voice_output.mp3'))
+  assert.ok(existsSync(value.output), '默认输出应落在会话工作区')
+  const relative = await tts.execute({ text: '相对路径', output: 'nested/relative.mp3' }, exec)
+  assert.equal(relative.output, join(sessionDir, 'nested', 'relative.mp3'))
+  assert.ok(existsSync(relative.output), '相对 output 应落在会话工作区')
+  rmSync(sessionDir, { recursive: true, force: true })
 })
 
 test('cleanup', () => { rmSync(dir, { recursive: true, force: true }) })

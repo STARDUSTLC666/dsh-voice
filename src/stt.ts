@@ -16,6 +16,11 @@ export interface SttOptions {
 
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
+/** 字节数超过 25MB 时抛错：调用方可在读文件前先按 statSync 大小快速拒绝，避免白读整文件。 */
+export function assertAudioSize(bytes: number): void {
+  if (bytes > MAX_AUDIO_BYTES) throw new Error('音频超过 25MB 上限（ASR 接口限制），请先用 ffmpeg 压缩。')
+}
+
 /**
  * 调用 OpenAI 兼容 ASR 接口转写音频。
  * @throws 缺密钥 / 文件过大 / HTTP 错误 / 无文本时抛中文错误。
@@ -27,7 +32,7 @@ export async function transcribe(baseUrl: string, apiKey: string, options: SttOp
   if (apiKey === '') throw new Error('未配置 ASR 密钥：请设置环境变量 DSH_VOICE_ASR_KEY，或在 cordis.patch.yml 的 asrApiKey 配置后重启。')
   if (baseUrl === '') throw new Error('未配置 ASR 接口地址（asrEngine=custom 时必须提供 asrBaseUrl）。')
   if (options.audio.length === 0) throw new Error('音频文件为空。')
-  if (options.audio.length > MAX_AUDIO_BYTES) throw new Error('音频超过 25MB 上限（ASR 接口限制），请先用 ffmpeg 压缩。')
+  assertAudioSize(options.audio.length)
 
   // 代理 fetch（undici）只认它自己那份 FormData：喂 Node 全局 FormData 会被当成普通
   // 对象序列化成 "[object FormData]"（content-type: text/plain），所以优先用调用方 fetch

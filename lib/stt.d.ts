@@ -6,6 +6,8 @@ export interface SttOptions {
     language?: string;
     prompt?: string;
 }
+/** 字节数超过 25MB 时抛错：调用方可在读文件前先按 statSync 大小快速拒绝，避免白读整文件。 */
+export declare function assertAudioSize(bytes: number): void;
 /**
  * 调用 OpenAI 兼容 ASR 接口转写音频。
  * @throws 缺密钥 / 文件过大 / HTTP 错误 / 无文本时抛中文错误。
