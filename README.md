@@ -1,96 +1,44 @@
-[English](README.en.md)
-
 # dsh-voice
 
-> **你的 agent 会说话了**：edge-tts 微软神经语音免费无限量 + Whisper 转写。
+[English](README.en.md)
 
-![npm version](https://img.shields.io/npm/v/dsh-voice?label=npm&color=blue) ![npm downloads](https://img.shields.io/npm/dm/dsh-voice) ![license](https://img.shields.io/npm/l/dsh-voice) ![stars](https://img.shields.io/github/stars/STARDUSTLC666/dsh-voice?style=social)
+把文字生成语音，或通过兼容接口把音频转为文字。
 
-[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+[![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://img.shields.io/npm/dm/dsh-voice)](https://www.npmjs.com/package/dsh-voice)
 
+## 功能
 
-DSH（DeepSeek Harness）语音双件套插件：让 agent **会说话、能听懂**。
-
-- **voice_tts**：文字转语音，走 **edge-tts 协议**（微软 Edge 朗读服务，免费无限量，22+ 常用音色）
-- **voice_stt**：语音转文字，走 **OpenAI 兼容 ASR 接口**（Groq / OpenAI / 自定义端点）
-- **voice_list**：音色清单
-- **voice_preview**：音色试听，用一段样例文本批量生成短 MP3，挑音色不用盲选
-- **voice_health**：配置自检，体检 TTS 音色 / ASR 密钥 / 接口地址 / 代理（不联网）
-
-## 兼容性
-
-验证宿主：官方源码构建的 Harness `0.2.0-rc.1`（commit `407e65c8`）+ Node `24.16.0`（2026-09-28）。55 项插件测试在隔离环境全部通过；同一个宿主里 18 个插件共同加载，注册 5 个工具，工具 schema 与健康检查契约通过。本轮未启用真实端口与外部服务。
+- 使用 Edge 在线朗读服务生成语音。
+- 列出音色并批量试听。
+- 通过 OpenAI 兼容 ASR 接口转写音频。
 
 ## 安装
 
-```bash
-dsh plugin --profile web add dsh-voice
-```
-
-## 卸载
+桌面版可在「插件」面板按包名 `dsh-voice` 安装。已配置 dsh 命令时也可使用：
 
 ```bash
-dsh plugin --profile web remove dsh-voice
+dsh plugin --profile desktop add dsh-voice
 ```
 
-卸载后重启 Web 服务。如需彻底清理，可再手动删除自己 profile `cordis.patch.yml` 中覆盖的插件行。
+网页版把命令中的 `desktop` 改为 `web`。安装后重启 DSH。
 
+## 开始使用
 
-## 配置
+可说：“把这段文字生成中文 MP3，并给我两个音色试听。”配置 ASR 后，也可要求转写音频文件。
 
-`voice_tts` 零配置可用；`voice_stt` 需要 ASR 密钥：
+## 依赖与配置
 
-```yaml
-- id: voice
-  name: 'dsh-voice'
-  config:
-    asrEngine: groq                       # groq | openai | custom
-    asrModel: whisper-large-v3-turbo      # groq 的 whisper 模型
-    # asrApiKey: gsk_...                  # 推荐改用环境变量 DSH_VOICE_ASR_KEY
-    ttsVoice: zh-CN-XiaoxiaoNeural        # 默认音色
-    # proxyUrl: http://127.0.0.1:7890     # ASR 接口需要特殊代理时启用
-```
+语音合成需要网络连接；转写需配置对应 ASR 服务与密钥。代理可以单独设置。
 
-## 工具一览
+详细配置、工具参数与排错见[使用说明](docs/USAGE.md)。从源码独立开发时，Node 要求以 [package.json](package.json) 为准。
 
-| 工具 | 作用 | 关键参数 |
-| :-- | :-- | :-- |
-| `voice_tts` | 文字合成 MP3（免费） | `text` 必填；`voice`/`rate`/`pitch`/`output` 可选 |
-| `voice_stt` | 音频转文字 | `audio` 必填；`engine`/`model`/`language`/`prompt`/`output` 可选 |
-| `voice_list` | 常用音色清单 | 无 |
-| `voice_preview` | 音色试听：批量生成短样例 MP3 | `voices`（≤8 个）/ `text` / `outputDir` 可选 |
-| `voice_health` | 配置自检（不联网） | 无 |
+## 文档
 
-### 示例
-
-```text
-voice_tts { text: 今天的 AI 早报来了 }                    # 晓晓女声，输出 voice_output.mp3
-voice_tts { text: hello, voice: en-US-AriaNeural }        # 英文女声
-voice_stt { audio: E:\audio\meeting.mp3, language: zh } # 转写会议录音
-voice_list {}
-voice_preview { voices: [zh-CN-XiaoxiaoNeural, en-US-AriaNeural] } # 生成两个试听样例
-voice_health {}                                          # 自检 TTS / ASR / 代理配置
-```
-
-## 硬核细节
-
-- **edge-tts 协议直连**：Sec-MS-GEC 令牌按官方 DRM 算法**本地生成**（SHA256(Windows 文件时间 + TrustedClientToken)，5 分钟窗口），WS 传输用 `ws` 库 + permessage-deflate 压缩 + 可选 HTTP CONNECT 代理隧道
-- **零 API 成本**：TTS 完全免费；STT 只花你选的 ASR 接口的钱
-- 文本 ≤5000 字符、音频 ≤25MB 前置校验；输出同名自动加序号
-- 协议对齐开源 edge-tts 当前版本（7.x），不依赖过时的令牌端点
-
-## 开发
-
-```bash
-pnpm install
-pnpm test       # 构建 + 离线单元测试（使用模拟的 TTS/ASR）
-pnpm test:integration  # 显式联网，调用真实 edge-tts；网络或断言失败均报错
-```
+- [使用与排错](docs/USAGE.md)
+- [更新记录](CHANGELOG.md)
+- [验证范围与历史记录](docs/VALIDATION.md)
+- [问题反馈与功能建议](https://github.com/STARDUSTLC666/dsh-voice/issues)
 
 ## License
 
-MIT
-
-## 版本记录
-
-- **0.3.4（2026-09-18）**：修复代理路径 STT 上传 `[object FormData]`、25MB 校验在读入之后、输出目录不存在白烧一次合成、默认输出落宿主 cwd；`exec.signal` 全程透传、preview 改 3 路并发。测试 55 项。
+[MIT](LICENSE)
