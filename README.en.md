@@ -2,6 +2,8 @@
 
 [中文](README.md)
 
+![dsh-voice whale girl plugin cover](https://raw.githubusercontent.com/STARDUSTLC666/dsh-voice/master/assets/cover-whale-girl.png)
+
 Generate speech from text or transcribe audio through a compatible API.
 
 [![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://img.shields.io/npm/dm/dsh-voice)](https://www.npmjs.com/package/dsh-voice)
