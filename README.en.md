@@ -6,7 +6,7 @@
 
 Generate speech from text or transcribe audio through a compatible API.
 
-[![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://img.shields.io/npm/dm/dsh-voice)](https://www.npmjs.com/package/dsh-voice)
+[![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
 
 ## What it does
 

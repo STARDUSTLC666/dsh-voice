@@ -6,7 +6,7 @@
 
 把文字生成语音，或通过兼容接口把音频转为文字。
 
-[![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://img.shields.io/npm/dm/dsh-voice)](https://www.npmjs.com/package/dsh-voice)
+[![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
 
 ## 功能
 
