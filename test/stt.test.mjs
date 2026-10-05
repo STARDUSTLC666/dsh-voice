@@ -60,3 +60,28 @@ test('配代理时上传的必须是 undici 认得的 multipart，而不是 "[ob
   assert.equal(seen.filename, 'a.mp3')
   assert.equal(result.text, '识别成功')
 })
+
+test('接口忽略取消信号或响应体不结束时，ASR 超时仍生效', async () => {
+  const options = { audio: Buffer.from([1]), filename: 'a.mp3', model: 'm' }
+  const delayed = (value) => new Promise((resolve) => setTimeout(() => resolve(value), 100))
+  await assert.rejects(() => transcribe('https://x', 'k', options,
+    () => delayed({ ok: true, json: async () => ({ text: '迟到' }) }), 20), /请求超时/)
+  await assert.rejects(() => transcribe('https://x', 'k', options,
+    async () => ({ ok: true, json: () => delayed({ text: '迟到' }) }), 20), /响应读取超时/)
+  await assert.rejects(() => transcribe('https://x', 'k', options,
+    async () => ({ ok: false, status: 500, text: () => delayed('迟到') }), 20), /响应读取超时/)
+})
+
+test('响应体读取可以取消，缺失或空文本不会被当作转写完成', async () => {
+  const options = { audio: Buffer.from([1]), filename: 'a.mp3', model: 'm' }
+  const controller = new AbortController()
+  const reason = new Error('用户取消')
+  const reading = transcribe('https://x', 'k', options, async () => ({ ok: true,
+    json: () => new Promise((resolve) => setTimeout(() => resolve({ text: '迟到' }), 100)) }), 5000, controller.signal)
+  setTimeout(() => controller.abort(reason), 10)
+  await assert.rejects(reading, (error) => error === reason)
+  for (const json of [{}, { text: 123 }, { text: '  ' }]) {
+    await assert.rejects(() => transcribe('https://x', 'k', options,
+      async () => ({ ok: true, json: async () => json }), 5000), /缺少文本|未识别到语音/)
+  }
+})

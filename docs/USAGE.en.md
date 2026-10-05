@@ -2,6 +2,10 @@
 
 [Overview](../README.en.md) · [Changelog](../CHANGELOG.md) · [Validation](VALIDATION.md)
 
+## Current improvements
+
+Check the ASR endpoint, key and response format after a failure. Blank results are not saved as successful transcripts. Verify TTS and ASR service availability separately.
+
 ## Installation
 
 ```bash
