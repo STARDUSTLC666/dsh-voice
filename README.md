@@ -8,6 +8,8 @@
 
 [![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
 
+欢迎使用，遇到问题或有改进建议，请提交 [issues](https://github.com/STARDUSTLC666/dsh-voice/issues) 和 [PR](https://github.com/STARDUSTLC666/dsh-voice/pulls)。
+
 ## 功能
 
 - 使用 Edge 在线朗读服务生成语音。
