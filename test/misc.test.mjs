@@ -61,15 +61,18 @@ test('resolveConfig：引擎预设与密钥回退', () => {
 
 test('cleanup', () => { rmSync(dir, { recursive: true, force: true }) })
 test('符号链接不能把读写带到工作区外', { skip: process.platform === 'win32' }, () => {
+  // 自带夹具：本文件末尾的 cleanup 已经删掉共享的 dir。
+  const workspace = mkdtempSync(join(tmpdir(), 'dsh-voice-link-ws-'))
   const outside = mkdtempSync(join(tmpdir(), 'dsh-voice-link-out-'))
   const secret = join(outside, 'secret.mp3')
   writeFileSync(secret, 'PRIVATE KEY')
-  const linkIn = join(dir, 'link-in.mp3')
-  const linkOut = join(dir, 'dangling.mp3')
+  const linkIn = join(workspace, 'link-in.mp3')
+  const linkOut = join(workspace, 'dangling.mp3')
   symlinkSync(secret, linkIn)
   symlinkSync(join(outside, 'not-yet-created.mp3'), linkOut)
-  assert.throws(() => assertAudioFile(linkIn, dir), /必须位于会话工作区内/)
-  assert.throws(() => resolveOutputPath(linkOut, '', false, dir), /符号链接/)
-  assert.throws(() => resolveOutputPath(linkOut, '', true, dir), /符号链接/)
+  assert.throws(() => assertAudioFile(linkIn, workspace), /必须位于会话工作区内/)
+  assert.throws(() => resolveOutputPath(linkOut, '', false, workspace), /符号链接/)
+  assert.throws(() => resolveOutputPath(linkOut, '', true, workspace), /符号链接/)
+  rmSync(workspace, { recursive: true, force: true })
   rmSync(outside, { recursive: true, force: true })
 })
