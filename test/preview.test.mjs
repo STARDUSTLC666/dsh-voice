@@ -24,7 +24,7 @@ test('voice_preview 缺省用 voice_list 前 4 个音色并落盘', async () => 
   const tts = fakeTts()
   const preview = buildVoiceTools(cfg, { tts }).find((t) => t.name === 'voice_preview')
   const outDir = join(dir, 'default')
-  const value = await preview.execute({ outputDir: outDir })
+  const value = await preview.execute({ outputDir: outDir }, { agent: { session: { header: { cwd: dir } } } })
   assert.equal(value.count, 4)
   assert.equal(value.failed.length, 0)
   assert.equal(value.text, DEFAULT_PREVIEW_TEXT)
@@ -39,7 +39,7 @@ test('voice_preview 缺省用 voice_list 前 4 个音色并落盘', async () => 
 test('voice_preview 非法音色进 failed 不阻断', async () => {
   const tts = fakeTts(['zh-CN-YunxiNeural'])
   const preview = buildVoiceTools(cfg, { tts }).find((t) => t.name === 'voice_preview')
-  const value = await preview.execute({ voices: ['zh-CN-XiaoxiaoNeural', 'not_a_voice!', 'zh-CN-YunxiNeural'], outputDir: join(dir, 'mixed') })
+  const value = await preview.execute({ voices: ['zh-CN-XiaoxiaoNeural', 'not_a_voice!', 'zh-CN-YunxiNeural'], outputDir: join(dir, 'mixed') }, { agent: { session: { header: { cwd: dir } } } })
   assert.equal(value.count, 1)
   assert.equal(value.failed.length, 2)
   assert.match(String(value.failed[0].error), /不合法/)
@@ -70,6 +70,17 @@ test('voice_preview：缺省输出目录落在 session.header.cwd', async () => 
   assert.equal(value.samples[0].output, join(sessionDir, 'voice_previews', 'voice-preview-zh-CN-XiaoxiaoNeural.mp3'))
   assert.ok(existsSync(value.samples[0].output), '缺省试听样例应落在会话工作区')
   rmSync(sessionDir, { recursive: true, force: true })
+})
+
+test('voice_preview：overwrite=false 时同名样例加序号而不是直接覆盖', async () => {
+  const outDir = join(dir, 'repeat')
+  const preview = buildVoiceTools(cfg, { tts: fakeTts() }).find((t) => t.name === 'voice_preview')
+  const exec = { agent: { session: { header: { cwd: dir } } } }
+  const first = await preview.execute({ voices: ['zh-CN-XiaoxiaoNeural'], outputDir: outDir }, exec)
+  const second = await preview.execute({ voices: ['zh-CN-XiaoxiaoNeural'], outputDir: outDir }, exec)
+  assert.equal(first.samples[0].output, join(outDir, 'voice-preview-zh-CN-XiaoxiaoNeural.mp3'))
+  assert.equal(second.samples[0].output, join(outDir, 'voice-preview-zh-CN-XiaoxiaoNeural_1.mp3'))
+  assert.ok(existsSync(first.samples[0].output) && existsSync(second.samples[0].output))
 })
 
 test('清理', () => { rmSync(dir, { recursive: true, force: true }) })

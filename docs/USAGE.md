@@ -40,7 +40,7 @@ dsh plugin --profile web remove dsh-voice
 | 工具 | 作用 | 关键参数 |
 | :-- | :-- | :-- |
 | `voice_tts` | 文字合成 MP3（Edge 在线服务） | `text` 必填；`voice`/`rate`/`pitch`/`output` 可选 |
-| `voice_stt` | 音频转文字 | `audio` 必填；`engine`/`model`/`language`/`prompt`/`output` 可选 |
+| `voice_stt` | 音频转文字 | `audio` 必填；`model`/`language`/`prompt`/`output` 可选；`engine` 只能与配置 `asrEngine` 相同 |
 | `voice_list` | 常用音色清单 | 无 |
 | `voice_preview` | 音色试听：批量生成短样例 MP3 | `voices`（≤8 个）/ `text` / `outputDir` 可选 |
 | `voice_health` | 配置自检（不联网） | 无 |
@@ -50,7 +50,7 @@ dsh plugin --profile web remove dsh-voice
 ```text
 voice_tts { text: 今天的 AI 早报来了 }                    # 晓晓女声，输出 voice_output.mp3
 voice_tts { text: hello, voice: en-US-AriaNeural }        # 英文女声
-voice_stt { audio: E:\audio\meeting.mp3, language: zh } # 转写会议录音
+voice_stt { audio: meeting.mp3, language: zh }           # 转写会话工作区里的录音
 voice_list {}
 voice_preview { voices: [zh-CN-XiaoxiaoNeural, en-US-AriaNeural] } # 生成两个试听样例
 voice_health {}                                          # 自检 TTS / ASR / 代理配置
@@ -60,7 +60,11 @@ voice_health {}                                          # 自检 TTS / ASR / �
 
 - **edge-tts 协议直连**：Sec-MS-GEC 令牌按官方 DRM 算法**本地生成**（SHA256(Windows 文件时间 + TrustedClientToken)，5 分钟窗口），WS 传输用 `ws` 库 + permessage-deflate 压缩 + 可选 HTTP CONNECT 代理隧道
 - **接口配置**：TTS 无需另填 API Key；STT 使用你配置的 ASR 服务，其计费与额度由该服务决定。
-- 文本 ≤5000 字符、音频 ≤25MB 前置校验；输出同名自动加序号
+- 文本 ≤5000 字符、音频 ≤25MB 前置校验（读入后再按实际字节数复查一次）；输出同名自动加序号
+- **读写都在会话工作区内**：`audio` 与 `output` / `outputDir` 解析后（含符号链接）必须落在 `session.header.cwd` 之下，越界直接报错。想转写工作区外的录音，先复制进来；输出同理
+- **不跟随符号链接写文件**：目标是符号链接（含悬空链接）时拒绝写入，新建文件用 `O_EXCL`，避免检查完再被换成链接
+- **转写文本 0600**：`voice_stt` 写出的 `.txt` 只给当前用户读写（Windows 不检查权限位）
+- **密钥只发给配置的地址**：ASR 请求地址一律取配置 `asrBaseUrl`（groq/openai 的预设只是缺省值），模型传的 `engine` 与配置不一致会直接报错，避免把密钥发到另一家的主机
 - Edge TTS 协议适配保留在插件实现中，不使用旧令牌端点。
 
 ## 开发

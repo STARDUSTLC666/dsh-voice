@@ -3,11 +3,11 @@
  *
  * @module dsh-voice/tools
  */
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { readFileSync, statSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { type ResolvedVoiceConfig } from './config.js'
 import { synthesizeSpeech } from './edge-tts.js'
-import { assertAudioFile, resolveOutputPath } from './paths.js'
+import { assertAudioFile, ensureWorkspaceDirectory, resolveOutputPath, writeWorkspaceFile } from './paths.js'
 import { createProxyFetch } from './proxy-fetch.js'
 import { assertAudioSize, transcribe } from './stt.js'
 import { isValidVoiceId, VOICES } from './voices.js'
@@ -117,12 +117,6 @@ function sessionCwd(exec: unknown): string {
   return typeof cwd === 'string' && cwd.trim() !== '' ? cwd : process.cwd()
 }
 
-/** 写文件前先建父目录，避免合成/转写完成后才因 ENOENT 白烧一次接口调用。 */
-function writeFileWithDir(target: string, data: string | Buffer): void {
-  mkdirSync(dirname(target), { recursive: true })
-  writeFileSync(target, data)
-}
-
 const voiceItemSchema = {
   type: 'object',
   properties: { id: { type: 'string' }, gender: { type: 'string' }, locale: { type: 'string' } },
@@ -170,6 +164,9 @@ const previewSchema = {
   },
   additionalProperties: true,
 }
+
+/** 自定义端点没配 asrModel 时的兜底模型名。 */
+const FALLBACK_ASR_MODEL = 'whisper-1'
 
 /** 默认试听文本（中英混合，便于感知发音差异）。 */
 export const DEFAULT_PREVIEW_TEXT = '你好，这是音色试听。Hello, this is a voice preview.'
@@ -254,7 +251,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       const output = resolveOutputPath(optionalString(args, 'output'), 'voice_output.mp3', cfg.overwrite, sessionCwd(exec))
       const audio = await raceAbort((deps.tts ?? synthesizeSpeech)({ text, voice, rate, pitch }, { proxyUrl: cfg.proxyUrl }, timeout, signal), signal)
       throwIfAborted(signal)
-      writeFileWithDir(output, audio)
+      writeWorkspaceFile(output, audio, sessionCwd(exec))
       return { output, bytes: audio.length, voice, rate, pitch, textLength: text.length }
     },
     timeoutMs: timeout + 10000,
@@ -265,7 +262,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
     description: '语音转文字：调用 OpenAI 兼容 ASR 接口（默认 Groq whisper-large-v3-turbo；可切 openai/custom）。audio 为音频文件路径（mp3/wav/m4a/ogg/flac，≤25MB）；language/prompt 可选；output 可把转写文本写成 .txt。密钥用环境变量 DSH_VOICE_ASR_KEY 或配置 asrApiKey。',
     parameters: compileParameters({
       audio: { type: 'string', required: true, description: '音频文件路径（必填）。' },
-      engine: { type: 'string', enum: ['groq', 'openai', 'custom'], description: '引擎：groq / openai / custom（可选，默认配置值）。' },
+      engine: { type: 'string', enum: ['groq', 'openai', 'custom'], description: '引擎（可选）：只接受与配置 asrEngine 相同的值，用于显式确认；接口地址与密钥始终取配置。' },
       model: { type: 'string', description: '模型名（可选，覆盖配置）。' },
       language: { type: 'string', description: '语言提示，如 zh（可选）。' },
       prompt: { type: 'string', description: '提示词（专有名词/术语纠偏，可选）。' },
@@ -282,17 +279,25 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       const signal = execSignal(exec)
       throwIfAborted(signal)
       const args = asRecord(rawArgs)
-      const audioPath = assertAudioFile(requiredString(args, 'audio', '音频文件'), sessionCwd(exec))
+      const cwd = sessionCwd(exec)
+      const audioPath = assertAudioFile(requiredString(args, 'audio', '音频文件'), cwd)
+      const requestedEngine = optionalString(args, 'engine')
+      if (requestedEngine !== undefined && !['groq', 'openai', 'custom'].includes(requestedEngine)) {
+        throw new Error('engine 必须是 groq / openai / custom 之一（当前：' + requestedEngine + '）。')
+      }
+      if (requestedEngine !== undefined && requestedEngine !== cfg.asrEngine) {
+        throw new Error('voice_stt 不支持用 engine 参数临时换引擎（配置 asrEngine=' + cfg.asrEngine + '，本次传入 ' + requestedEngine + '）。接口地址与密钥是一组配置，混着用会把密钥发到非预期的服务；如需切换请改配置里的 asrEngine / asrBaseUrl。')
+      }
+      // 接口地址一律取配置：openai/groq 预设已由 resolveConfig 回填，自定义端点原样使用。
+      const baseUrl = cfg.asrBaseUrl
+      if (baseUrl === '') throw new Error('未配置 ASR 接口地址：asrEngine=custom 时必须在配置里提供 asrBaseUrl。')
       assertAudioSize(statSync(audioPath).size)
-      const engine = optionalString(args, 'engine') ?? cfg.asrEngine
-      let baseUrl: string
-      let model: string
-      if (engine === 'openai') { baseUrl = 'https://api.openai.com/v1'; model = optionalString(args, 'model') ?? 'whisper-1' }
-      else if (engine === 'custom') { baseUrl = cfg.asrBaseUrl; model = optionalString(args, 'model') ?? cfg.asrModel }
-      else if (engine === 'groq') { baseUrl = 'https://api.groq.com/openai/v1'; model = optionalString(args, 'model') ?? (cfg.asrModel !== '' && cfg.asrEngine === 'groq' ? cfg.asrModel : 'whisper-large-v3-turbo') }
-      else throw new Error('engine 必须是 groq / openai / custom 之一（当前：' + engine + '）。')
+      const audio = readFileSync(audioPath)
+      // 伪文件（如 procfs）stat 报 0 字节，按实际读到的长度再判一次。
+      assertAudioSize(audio.length)
+      const model = optionalString(args, 'model') ?? (cfg.asrModel !== '' ? cfg.asrModel : FALLBACK_ASR_MODEL)
       const { text } = await raceAbort((deps.stt ?? transcribe)(baseUrl, cfg.asrApiKey, {
-        audio: readFileSync(audioPath),
+        audio,
         filename: basename(audioPath),
         model,
         language: optionalString(args, 'language'),
@@ -302,8 +307,9 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       let transcriptFile = ''
       const output = optionalString(args, 'output')
       if (output !== undefined) {
-        const target = resolveOutputPath(output, '', cfg.overwrite, sessionCwd(exec))
-        writeFileWithDir(target, text)
+        const target = resolveOutputPath(output, '', cfg.overwrite, cwd)
+        // 转写文本可能含隐私内容，只用 0600 写入。
+        writeWorkspaceFile(target, text, cwd, 0o600)
         transcriptFile = target
       }
       // The output schema declares these as strings — never return null, or
@@ -350,8 +356,8 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       if (targets.length > 8) throw new Error('voices 最多 8 个（当前 ' + targets.length + ' 个），试听一次别太多，慢且耗资源。')
       const text = optionalString(args, 'text') ?? DEFAULT_PREVIEW_TEXT
       if (text.length > 200) throw new Error('试听文本请控制在 200 字以内（试听要短平快）。')
-      const outDir = resolve(sessionCwd(exec), optionalString(args, 'outputDir') ?? 'voice_previews')
-      mkdirSync(outDir, { recursive: true })
+      const cwd = sessionCwd(exec)
+      const outDir = ensureWorkspaceDirectory(optionalString(args, 'outputDir') ?? 'voice_previews', cwd)
       const outcomes = await mapLimit<string, PreviewOutcome>(targets, PREVIEW_CONCURRENCY, signal, async (voice) => {
         throwIfAborted(signal)
         if (!isValidVoiceId(voice)) {
@@ -360,8 +366,10 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
         try {
           const audio = await raceAbort((deps.tts ?? synthesizeSpeech)({ text, voice, rate: cfg.ttsRate, pitch: cfg.ttsPitch }, { proxyUrl: cfg.proxyUrl }, timeout, signal), signal)
           throwIfAborted(signal)
-          const file = join(outDir, 'voice-preview-' + voice.replace(/[^a-zA-Z0-9-]/g, '_') + '.mp3')
-          writeFileSync(file, audio)
+          const name = 'voice-preview-' + voice.replace(/[^a-zA-Z0-9-]/g, '_') + '.mp3'
+          // 复用 resolveOutputPath：overwrite=false 时改名加序号，不再直接覆盖同名样例。
+          const file = resolveOutputPath(join(outDir, name), '', cfg.overwrite, cwd)
+          writeWorkspaceFile(file, audio, cwd)
           return { voice, output: file, bytes: audio.length }
         } catch (error) {
           throwIfAborted(signal)

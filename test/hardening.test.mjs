@@ -119,7 +119,7 @@ test('voice_preview：同时在跑的 TTS 不超过 3 路', { timeout: 8000 }, a
     return Buffer.from('audio')
   }
   const preview = buildVoiceTools(resolveConfig({ timeoutMs: 5000 }), { tts }).find((t) => t.name === 'voice_preview')
-  const promise = preview.execute({ voices: EIGHT_VOICES, outputDir: join(sessionDir, 'out') })
+  const promise = preview.execute({ voices: EIGHT_VOICES, outputDir: join(sessionDir, 'out') }, { agent: { session: { header: { cwd: sessionDir } } } })
   for (let i = 0; i < 50 && started < 3; i++) await tick()
   assert.equal(started, 3, '有界并发首批只应启动 3 路，实际 ' + started)
   assert.equal(maxActive, 3, '恰好 3 路在跑，实际 ' + maxActive)
@@ -147,7 +147,7 @@ test('voice_preview：abort 立即中断进行中的合成并以取消原因 rej
     return Buffer.from('audio')
   }
   const preview = buildVoiceTools(resolveConfig({ timeoutMs: 5000 }), { tts }).find((t) => t.name === 'voice_preview')
-  const promise = preview.execute({ voices: EIGHT_VOICES, outputDir: join(sessionDir, 'out') }, { signal: controller.signal })
+  const promise = preview.execute({ voices: EIGHT_VOICES, outputDir: join(sessionDir, 'out') }, { signal: controller.signal, agent: { session: { header: { cwd: sessionDir } } } })
   await tick()
   controller.abort(new Error('取消试听'))
   await assert.rejects(() => promise, /取消试听/)
