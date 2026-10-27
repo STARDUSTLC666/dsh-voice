@@ -4,6 +4,12 @@
 
 [历史英文记录](docs/CHANGELOG.en.md)
 
+## 0.4.0 (2026-10-26)
+
+- Add this plugin’s own update controls and independent preferences. Automatic installation stays off until explicitly enabled.
+- Confirm manual installs, preserve local sources and disabled state, pause for tasks or unsaved changes, and use native DSH recovery without forced restarts.
+- Require the public DSH 0.2.1-rc.3 update APIs; Suite components remain managed through Suite.
+
 ## 0.3.7 (2026-10-20)
 
 - 修复 voice_stt 的引擎/地址错配：openai、groq 分支不再写死厂商地址，一律使用配置 `asrBaseUrl`；模型传的 `engine` 与配置 `asrEngine` 不一致时直接报错，避免把 groq 的密钥发给 OpenAI 或把自建服务的密钥发给厂商

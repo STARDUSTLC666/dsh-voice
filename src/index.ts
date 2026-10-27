@@ -1,3 +1,4 @@
+import { registerUpdates } from '@stardustlc/dsh-updates'
 /**
  * dsh-voice —— 语音双件套工具插件（node 半身，配置走 cordis.patch.yml）。
  *
@@ -25,6 +26,8 @@ export interface VoicePluginContext {
  * 插件入口：解析配置并注册五个语音工具。
  */
 export function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): void {
+  registerUpdates(ctx, { name: "dsh-voice" })
+
   let cfg
   try {
     cfg = resolveConfig(config)
