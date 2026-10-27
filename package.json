@@ -1,6 +1,6 @@
 {
   "name": "dsh-voice",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "把文字生成语音，或通过兼容接口把音频转为文字。",
   "type": "module",
   "main": "lib/index.js",
@@ -61,7 +61,7 @@
     "https-proxy-agent": "^9.1.0",
     "undici": "^8.10.0",
     "ws": "^8.21.3",
-    "@stardustlc/dsh-updates": "0.1.0"
+    "@stardustlc/dsh-updates": "0.1.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
