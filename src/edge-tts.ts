@@ -5,14 +5,15 @@
  *
  * @module dsh-voice/edge-tts
  */
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { edgeTokenV2 } from './edge-drm-v2.js'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import WebSocket from 'ws'
 
 const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4'
 const WS_BASE = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1'
 const OUTPUT_FORMAT = 'audio-24khz-48kbitrate-mono-mp3'
-const SEC_MS_GEC_VERSION = '1-143.0.3650.75'
+const SEC_MS_GEC_VERSION = '2-143.0.3650.75'
 const WIN_EPOCH_SECONDS = 11644473600
 const WSS_HEADERS: Record<string, string> = {
   Pragma: 'no-cache',
@@ -63,14 +64,14 @@ function proxyWebSocket(proxyUrl: string): WebSocketFactory {
 }
 
 /**
- * 本地生成 Sec-MS-GEC 令牌（对齐 edge-tts DRM 算法）。
+ * 本地生成 Sec-MS-GEC v2 令牌（对齐 edge-tts 7.3.1）。
  */
 export function generateSecMsGec(nowSeconds: number = Date.now() / 1000): string {
   let ticks = Math.floor(nowSeconds) + WIN_EPOCH_SECONDS
   ticks -= ticks % 300
   const windowsTicks = ticks * 10000000
   const raw = String(windowsTicks) + TRUSTED_CLIENT_TOKEN
-  return createHash('sha256').update(raw, 'ascii').digest('hex').toUpperCase()
+  return edgeTokenV2(raw)
 }
 
 /** XML 转义。 */
@@ -107,7 +108,7 @@ export async function synthesizeSpeech(options: TtsOptions, deps: TtsDeps = {}, 
   // 对齐 edge-tts 当前协议：Sec-MS-GEC 走 URL 查询参数，MUID 走 header
   const url = WS_BASE + '?TrustedClientToken=' + TRUSTED_CLIENT_TOKEN + '&ConnectionId=' + randomUUID().replace(/-/g, '') + '&Sec-MS-GEC=' + token + '&Sec-MS-GEC-Version=' + SEC_MS_GEC_VERSION
   const socket = factory(url, {
-    headers: { ...WSS_HEADERS, MUID: randomBytes(16).toString('hex').toUpperCase() },
+    headers: { ...WSS_HEADERS, Cookie: 'muid=' + randomBytes(16).toString('hex').toUpperCase() + ';' },
   })
 
   const chunks: Buffer[] = []

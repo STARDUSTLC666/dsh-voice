@@ -3,7 +3,7 @@
  *
  * @module dsh-voice/paths
  */
-import { lstatSync, mkdirSync, openSync, closeSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, openSync, closeSync, realpathSync, statSync, writeFileSync, fstatSync, ftruncateSync, fchmodSync, constants, type Stats } from 'node:fs'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 /** 路径检查结果：不存在 / 符号链接 / 已存在。 */
@@ -28,8 +28,15 @@ function isInside(root: string, candidate: string): boolean {
 function pathState(target: string): PathState {
   try {
     return lstatSync(target).isSymbolicLink() ? 'symlink' : 'present'
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     return 'missing'
+  }
+}
+
+function assertOverwriteFile(target: string, stat: Stats = lstatSync(target)): void {
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+    throw new Error('覆盖目标必须是没有硬链接的普通文件：' + target + '。请改用新的输出文件名。')
   }
 }
 
@@ -100,6 +107,7 @@ export function resolveOutputPath(explicit: string | undefined, defaultName: str
   const requested = explicit !== undefined && explicit.trim() !== '' ? explicit.trim() : defaultName
   const target = resolve(root, requested)
   assertWritableTarget(target, root, '输出路径')
+  if (overwrite && pathState(target) === 'present') assertOverwriteFile(target)
   if (overwrite || pathState(target) === 'missing') return target
   const directory = dirname(target)
   const base = basename(target, extname(target))
@@ -133,23 +141,48 @@ export function ensureWorkspaceDirectory(input: string, cwd: string = process.cw
 }
 
 /**
- * 写工作区内的文件：先建父目录，再按「新建用 wx / 覆盖用 w」落盘。
+ * 写工作区内的文件，返回实际写入的路径。同名竞争通过 wx 排他创建解决。
  *
  * 新建时用 O_EXCL，避免检查完成到写入之间被人塞进一个符号链接。
  */
-export function writeWorkspaceFile(target: string, data: string | Buffer, cwd: string = process.cwd(), mode?: number): void {
+export function writeWorkspaceFile(target: string, data: string | Buffer, cwd: string = process.cwd(), mode?: number, overwrite = false): string {
   const root = workspaceRoot(cwd)
   assertWritableTarget(target, root, '输出路径')
   mkdirSync(dirname(target), { recursive: true })
-  assertWritableTarget(target, root, '输出路径')
-  if (pathState(target) === 'missing') {
-    const fd = openSync(target, 'wx', mode)
+  const extension = extname(target), base = basename(target, extension)
+  for (let index = 0; index < 1000; index++) {
+    const candidate = index === 0 ? target : join(dirname(target), base + '_' + index + extension)
+    if (index > 0 && pathState(candidate) !== 'missing') continue
+    assertWritableTarget(candidate, root, '输出路径')
+    let fd: number
+    try { fd = openSync(candidate, 'wx', mode) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      if (!overwrite) continue
+      // 不在校验前截断文件。打开后还需检查真实句柄，防止静态硬链接和替换。
+      const before = lstatSync(candidate)
+      assertOverwriteFile(candidate, before)
+      fd = openSync(candidate, constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0))
+      try {
+        const opened = fstatSync(fd), current = lstatSync(candidate)
+        assertOverwriteFile(candidate, opened)
+        assertOverwriteFile(candidate, current)
+        assertWritableTarget(candidate, root, '输出路径')
+        if (opened.dev !== before.dev || opened.ino !== before.ino || opened.dev !== current.dev || opened.ino !== current.ino) {
+          throw new Error('输出文件在写入前发生变化，请重试：' + candidate)
+        }
+        if (mode !== undefined && process.platform !== 'win32') fchmodSync(fd, mode)
+        ftruncateSync(fd, 0)
+        writeFileSync(fd, data)
+      } finally { closeSync(fd) }
+      return candidate
+    }
     try {
       writeFileSync(fd, data)
     } finally {
       closeSync(fd)
     }
-    return
+    return candidate
   }
-  writeFileSync(target, data, mode === undefined ? undefined : { mode })
+  throw new Error('找不到可用的输出文件名（同名文件超过 999 个），请显式指定 output。')
 }

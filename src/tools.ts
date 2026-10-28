@@ -248,10 +248,11 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       for (const [value, label] of [[rate, '语速 rate'], [pitch, '音调 pitch']] as const) {
         if (!/^[+-]?\d+(\.\d+)?(%|Hz|st)$/.test(value)) throw new Error(label + ' 不合法：' + value + '。合法格式如 +10%、-2Hz、+1st。')
       }
-      const output = resolveOutputPath(optionalString(args, 'output'), 'voice_output.mp3', cfg.overwrite, sessionCwd(exec))
+      const requested = optionalString(args, 'output'), cwd = sessionCwd(exec)
+      resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd)
       const audio = await raceAbort((deps.tts ?? synthesizeSpeech)({ text, voice, rate, pitch }, { proxyUrl: cfg.proxyUrl }, timeout, signal), signal)
       throwIfAborted(signal)
-      writeWorkspaceFile(output, audio, sessionCwd(exec))
+      const output = writeWorkspaceFile(resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd), audio, cwd, undefined, cfg.overwrite)
       return { output, bytes: audio.length, voice, rate, pitch, textLength: text.length }
     },
     timeoutMs: timeout + 10000,
@@ -309,8 +310,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       if (output !== undefined) {
         const target = resolveOutputPath(output, '', cfg.overwrite, cwd)
         // 转写文本可能含隐私内容，只用 0600 写入。
-        writeWorkspaceFile(target, text, cwd, 0o600)
-        transcriptFile = target
+        transcriptFile = writeWorkspaceFile(target, text, cwd, 0o600, cfg.overwrite)
       }
       // The output schema declares these as strings — never return null, or
       // dsh rejects the whole tool result (issue #1).
@@ -369,8 +369,8 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
           const name = 'voice-preview-' + voice.replace(/[^a-zA-Z0-9-]/g, '_') + '.mp3'
           // 复用 resolveOutputPath：overwrite=false 时改名加序号，不再直接覆盖同名样例。
           const file = resolveOutputPath(join(outDir, name), '', cfg.overwrite, cwd)
-          writeWorkspaceFile(file, audio, cwd)
-          return { voice, output: file, bytes: audio.length }
+          const output = writeWorkspaceFile(file, audio, cwd, undefined, cfg.overwrite)
+          return { voice, output, bytes: audio.length }
         } catch (error) {
           throwIfAborted(signal)
           return { voice, error: error instanceof Error ? error.message : String(error) }

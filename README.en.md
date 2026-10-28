@@ -51,4 +51,4 @@ Older releases need one manual update in native plugin management to acquire the
 
 ## License
 
-[MIT](LICENSE)
+Original code: [MIT](LICENSE). The separate Edge v2 token module is LGPLv3; its source and license are included. See [third-party notices](THIRD_PARTY_NOTICES.md).

@@ -34,10 +34,10 @@ function audioFrame(payload) {
   return Buffer.concat([headerLength, header, Buffer.from(payload)])
 }
 
-test('generateSecMsGec：64 位十六进制大写，5 分钟窗口内稳定', () => {
+test('generateSecMsGec：v2 格式，5 分钟窗口内稳定', () => {
   const base = 1700000000 - (1700000000 % 300) // 窗口对齐
   const token = generateSecMsGec(base)
-  assert.match(token, /^[0-9A-F]{64}$/)
+  assert.match(token, /^[0-9A-F]{16}-[0-9A-F]{64}$/)
   assert.equal(token, generateSecMsGec(base + 299))
   assert.notEqual(token, generateSecMsGec(base + 301))
 })
@@ -50,9 +50,9 @@ test('synthesizeSpeech：本地令牌 → WS → config+SSML → 音频拼接', 
   assert.ok(ws.record.url.includes('TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4'))
   assert.ok(ws.record.url.includes('ConnectionId='))
   assert.ok(ws.record.url.includes('Sec-MS-GEC=' + generateSecMsGec(1700000000)))
-  assert.ok(ws.record.url.includes('Sec-MS-GEC-Version=1-143.0.3650.75'))
+  assert.ok(ws.record.url.includes('Sec-MS-GEC-Version=2-143.0.3650.75'))
   assert.equal(ws.record.headers['Sec-MS-GEC'], undefined)
-  assert.match(ws.record.headers.MUID, /^[0-9A-F]{32}$/)
+  assert.match(ws.record.headers.Cookie, /^muid=[0-9A-F]{32};$/)
   assert.equal(ws.record.sent.length, 2)
   assert.ok(ws.record.sent[0].includes('Path:speech.config'))
   assert.ok(ws.record.sent[1].includes('Path:ssml'))

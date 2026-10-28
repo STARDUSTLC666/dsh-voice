@@ -26,7 +26,7 @@ export type WebSocketFactory = (url: string, options: {
     headers: Record<string, string>;
 }) => WebSocketLike;
 /**
- * 本地生成 Sec-MS-GEC 令牌（对齐 edge-tts DRM 算法）。
+ * 本地生成 Sec-MS-GEC v2 令牌（对齐 edge-tts 7.3.1）。
  */
 export declare function generateSecMsGec(nowSeconds?: number): string;
 /** 生成 SSML。 */

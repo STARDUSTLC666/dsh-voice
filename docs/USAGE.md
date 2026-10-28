@@ -58,13 +58,15 @@ voice_health {}                                          # 自检 TTS / ASR / �
 
 ## 实现与文件限制
 
-- **edge-tts 协议直连**：Sec-MS-GEC 令牌按官方 DRM 算法**本地生成**（SHA256(Windows 文件时间 + TrustedClientToken)，5 分钟窗口），WS 传输用 `ws` 库 + permessage-deflate 压缩 + 可选 HTTP CONNECT 代理隧道
+- **edge-tts 协议直连**：对齐开源 edge-tts 7.3.1 的 Sec-MS-GEC v2 协议，令牌在本地按 5 分钟窗口生成；WS 使用 `ws` 库与可选 HTTP CONNECT 代理。不是微软官方 SDK，服务协议仍可能变更。
 - **接口配置**：TTS 无需另填 API Key；STT 使用你配置的 ASR 服务，其计费与额度由该服务决定。
 - 文本 ≤5000 字符、音频 ≤25MB 前置校验（读入后再按实际字节数复查一次）；输出同名自动加序号
 - **读写都在会话工作区内**：`audio` 与 `output` / `outputDir` 解析后（含符号链接）必须落在 `session.header.cwd` 之下，越界直接报错。想转写工作区外的录音，先复制进来；输出同理
 - **不跟随符号链接写文件**：目标是符号链接（含悬空链接）时拒绝写入，新建文件用 `O_EXCL`，避免检查完再被换成链接
 - **转写文本 0600**：`voice_stt` 写出的 `.txt` 只给当前用户读写（Windows 不检查权限位）
 - **密钥只发给配置的地址**：ASR 请求地址一律取配置 `asrBaseUrl`（groq/openai 的预设只是缺省值），模型传的 `engine` 与配置不一致会直接报错，避免把密钥发到另一家的主机
+- **重定向需要用户确认地址**：接口返回 3xx 时停止，不向跳转地址发送音频。请检查服务文档，把 `asrBaseUrl` 设为可信的最终接口；这也适用于配置了插件代理的请求。
+- **并发生成不覆盖**：`overwrite=false` 时即使两个任务同时写同名文件，或合成期间出现用户同名文件，也会另存并返回实际文件名。显式覆盖只接受没有硬链接的普通文件。
 - Edge TTS 协议适配保留在插件实现中，不使用旧令牌端点。
 
 ## 开发
@@ -77,4 +79,4 @@ pnpm test:integration  # 显式联网，调用真实 edge-tts；网络或断言�
 
 ## License
 
-MIT
+主体 MIT；独立的 Edge v2 令牌模块 LGPLv3，见[第三方声明](../THIRD_PARTY_NOTICES.md)。

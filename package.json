@@ -1,6 +1,6 @@
 {
   "name": "dsh-voice",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "description": "把文字生成语音，或通过兼容接口把音频转为文字。",
   "type": "module",
   "main": "lib/index.js",
@@ -20,7 +20,10 @@
     "README.md",
     "README.en.md",
     "docs",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "src/edge-drm-v2.ts",
+    "LICENSES",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-updates.mjs",
@@ -52,7 +55,7 @@
     "voice",
     "dsh-plugin"
   ],
-  "license": "MIT",
+  "license": "MIT AND LGPL-3.0-only",
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
     "dsh": ">=0.2.1-rc.3"

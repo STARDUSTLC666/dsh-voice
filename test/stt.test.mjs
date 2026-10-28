@@ -85,3 +85,8 @@ test('响应体读取可以取消，缺失或空文本不会被当作转写完�
       async () => ({ ok: true, json: async () => json }), 5000), /缺少文本|未识别到语音/)
   }
 })
+
+test('重定向响应的取消不结束时，仍受超时约束', { timeout: 2000 }, async () => {
+  await assert.rejects(transcribe('https://fixture.invalid', 'synthetic', { audio: Buffer.from([1]), filename: 'a.wav', model: 'fixture' },
+    async () => ({ status: 307, body: { cancel: () => new Promise(() => {}) } }), 20), /重定向/)
+})

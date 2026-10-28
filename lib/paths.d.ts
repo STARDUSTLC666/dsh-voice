@@ -16,8 +16,8 @@ export declare function resolveOutputPath(explicit: string | undefined, defaultN
 /** 确保输出目录存在且落在工作区内：不存在则创建，越界或符号链接报错。 */
 export declare function ensureWorkspaceDirectory(input: string, cwd?: string): string;
 /**
- * 写工作区内的文件：先建父目录，再按「新建用 wx / 覆盖用 w」落盘。
+ * 写工作区内的文件，返回实际写入的路径。同名竞争通过 wx 排他创建解决。
  *
  * 新建时用 O_EXCL，避免检查完成到写入之间被人塞进一个符号链接。
  */
-export declare function writeWorkspaceFile(target: string, data: string | Buffer, cwd?: string, mode?: number): void;
+export declare function writeWorkspaceFile(target: string, data: string | Buffer, cwd?: string, mode?: number, overwrite?: boolean): string;

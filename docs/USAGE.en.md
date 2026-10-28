@@ -4,6 +4,8 @@
 
 ## Current improvements
 
+ASR stops on redirects instead of forwarding audio to another endpoint, including through the plugin proxy. Set `asrBaseUrl` to the trusted final API address. With `overwrite=false`, concurrent outputs are saved separately and tools return the actual saved path. Explicit overwrite requires a regular file with no hard links.
+
 Check the ASR endpoint, key and response format after a failure. Blank results are not saved as successful transcripts. Verify TTS and ASR service availability separately.
 
 ## Installation
@@ -58,7 +60,7 @@ voice_health {}                                              # self-check TTS / 
 
 ## Implementation and file limits
 
-- **Direct edge-tts protocol**: the Sec-MS-GEC token is **generated locally** with the official DRM algorithm (SHA256 of Windows file time + trusted client token, 5-minute windows); transport uses the `ws` library with permessage-deflate and an optional HTTP CONNECT proxy tunnel
+- **Direct edge-tts protocol**: follows open-source edge-tts 7.3.1 Sec-MS-GEC v2, generating tokens locally in five-minute windows. Uses `ws` and optional HTTP CONNECT. This is not a Microsoft SDK, and the service protocol may change.
 - **API configuration**: TTS needs no separate API key. STT uses your configured ASR service, whose pricing and limits apply.
 - Up-front validation: text ≤ 5000 chars, audio ≤ 25MB (re-checked against the bytes actually read); same-name outputs auto-suffixed
 - **Reads and writes stay inside the session workspace**: `audio`, `output` and `outputDir` must resolve (symlinks included) under `session.header.cwd`; anything outside is rejected. Copy the file in first.
@@ -77,4 +79,4 @@ pnpm test:integration  # opt-in real edge-tts request; network and assertion err
 
 ## License
 
-MIT
+Original code MIT; separate Edge v2 token module LGPLv3. See [third-party notices](../THIRD_PARTY_NOTICES.md).
