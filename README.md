@@ -4,7 +4,7 @@
 
 ![dsh-voice 鲸鱼娘插件封面](https://raw.githubusercontent.com/STARDUSTLC666/dsh-voice/master/assets/cover-whale-girl.png)
 
-把文字生成语音，或通过兼容接口把音频转为文字。
+在 DSH 中把文字合成为语音，或将工作区录音转为文字。支持 Edge TTS 和 OpenAI / Groq / 自建兼容 ASR；转写使用你配置的地址，输出文件默认避免覆盖。
 
 [![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
 

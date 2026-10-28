@@ -4,7 +4,7 @@
 
 ![dsh-voice whale girl plugin cover](https://raw.githubusercontent.com/STARDUSTLC666/dsh-voice/master/assets/cover-whale-girl.png)
 
-Generate speech from text or transcribe audio through a compatible API.
+Generate speech or transcribe workspace recordings from DSH. Supports Edge TTS and OpenAI, Groq or custom compatible ASR; transcription uses your configured endpoint and output files avoid overwriting by default.
 
 [![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
 
