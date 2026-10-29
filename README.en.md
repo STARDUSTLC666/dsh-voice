@@ -6,7 +6,9 @@
 
 Generate speech or transcribe workspace recordings from DSH. Supports Edge TTS and OpenAI, Groq or custom compatible ASR; transcription uses your configured endpoint and output files avoid overwriting by default.
 
-[![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
+[![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice) [![total downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-total-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
+
+[Download statistics](https://github.com/STARDUSTLC666/dsh-suite/blob/npm-downloads/README.md)
 
 Feedback and contributions are welcome: report [issues](https://github.com/STARDUSTLC666/dsh-voice/issues) or submit [pull requests](https://github.com/STARDUSTLC666/dsh-voice/pulls).
 
@@ -28,7 +30,10 @@ For the web version, replace `desktop` with `web`. Restart DSH after installatio
 
 ## Start using it
 
-Ask to turn text into a Chinese MP3 and preview two voices. After configuring ASR, you can also request audio transcription.
+1. Start a DSH session in the workspace where you want the audio saved; ask it to check the voice tools.
+2. Provide text, language, voice and speed, for example: “Make a Chinese MP3 from this text; give me a short sample first.”
+3. Listen to the sample, generate the complete audio, then play or deliver the returned file.
+4. For transcription, configure your own compatible ASR service, provide a local audio file, then review the transcript.
 
 ## Requirements and configuration
 

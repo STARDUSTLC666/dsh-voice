@@ -6,7 +6,9 @@
 
 在 DSH 中把文字合成为语音，或将工作区录音转为文字。支持 Edge TTS 和 OpenAI / Groq / 自建兼容 ASR；转写使用你配置的地址，输出文件默认避免覆盖。
 
-[![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
+[![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice) [![total downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-total-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
+
+[下载统计说明](https://github.com/STARDUSTLC666/dsh-suite/blob/npm-downloads/README.md)
 
 欢迎使用，遇到问题或有改进建议，请提交 [issues](https://github.com/STARDUSTLC666/dsh-voice/issues) 和 [PR](https://github.com/STARDUSTLC666/dsh-voice/pulls)。
 
@@ -28,7 +30,10 @@ dsh plugin --profile desktop add dsh-voice
 
 ## 开始使用
 
-可说：“把这段文字生成中文 MP3，并给我两个音色试听。”配置 ASR 后，也可要求转写音频文件。
+1. 在要保存音频的工作区新建 DSH 会话，让助手先检查语音工具是否可用。
+2. 提供要朗读的文字、语言、音色和语速，例如“把这段文字生成中文 MP3，先给我短试听”。
+3. 试听后再生成完整音频，按工具返回的文件路径播放或交付。
+4. 需要转写时先配置自己的兼容 ASR 服务，再提供本地音频文件；核对转写结果后使用。
 
 ## 依赖与配置
 

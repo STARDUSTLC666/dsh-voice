@@ -1,6 +1,6 @@
 {
   "name": "dsh-voice",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "DSH 语音工具：Edge TTS 朗读、兼容 ASR 转写、工作区文件保护与并发输出。欢迎提交 issues 和 PR。",
   "type": "module",
   "main": "lib/index.js",
