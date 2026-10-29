@@ -1,7 +1,7 @@
 {
   "name": "dsh-voice",
-  "version": "0.5.0",
-  "description": "把文字生成语音，或通过兼容接口把音频转为文字。",
+  "version": "0.5.1",
+  "description": "DSH 语音工具：Edge TTS 朗读、兼容 ASR 转写、工作区文件保护与并发输出。欢迎提交 issues 和 PR。",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

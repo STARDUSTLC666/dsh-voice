@@ -4,6 +4,11 @@
 
 [历史英文记录](docs/CHANGELOG.en.md)
 
+## 0.5.1 (2026-10-29)
+
+- 同步仓库与 npm 的简明介绍、中英文 README 和反馈入口；本次为文档与包元数据更新。
+- Sync npm descriptions and both README guides with the repository, including issue and pull-request links.
+
 ## 0.5.0 (2026-10-28)
 
 - 跟进 edge-tts 7.3.1 的 v2 令牌与 Cookie 协议，恢复真实 Edge 在线语音；独立模块保留上游 LGPLv3 许可与源码，主体仍为 MIT。
