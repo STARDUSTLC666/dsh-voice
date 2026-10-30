@@ -1,6 +1,6 @@
 {
   "name": "dsh-voice",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "DSH 语音工具：Edge TTS 朗读、兼容 ASR 转写、工作区文件保护与并发输出。欢迎提交 issues 和 PR。",
   "type": "module",
   "main": "lib/index.js",
@@ -23,7 +23,8 @@
     "CHANGELOG.md",
     "src/edge-drm-v2.ts",
     "LICENSES",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "assets/plugin-icon.webp"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-updates.mjs",
@@ -80,5 +81,6 @@
   },
   "homepage": "https://github.com/STARDUSTLC666/dsh-voice#readme",
   "author": "stardustlc",
-  "packageManager": "pnpm@11.7.0"
+  "packageManager": "pnpm@11.7.0",
+  "icon": "./assets/plugin-icon.webp"
 }
