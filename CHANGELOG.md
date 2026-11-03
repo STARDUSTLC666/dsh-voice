@@ -1,5 +1,10 @@
 # 更新记录
 
+## 0.5.4 (2026-11-03)
+
+- voice_stt 显示落盘路径；voice_health 失败项带 hint 与影响面；使用说明补齐排错。
+- voice_stt reports the transcript path, voice_health adds hints and scope, and troubleshooting docs are added.
+
 ## 0.5.3 (2026-10-30)
 
 - 原生插件列表与详情新增专门生成的鲸鱼娘图标：大头像、独立功能符号、透明留白，适合 30 / 36 px 显示；原封面保留。
