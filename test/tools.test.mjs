@@ -62,8 +62,16 @@ test('voice_stt：注入假 stt，校验参数与转写文件', async () => {
   assert.equal(capturedArgs.options.language, 'zh')
   assert.equal(value.text, '转写结果')
   assert.equal(readFileSync(join(dir, 'transcript.txt'), 'utf8'), '转写结果')
+  // 用户要了 output，结果里就必须报出落盘路径，否则等于没保存。
+  assert.match(stt.output.render({}, value)[0].text, new RegExp('已写入：' + '.*transcript\\.txt'))
   await assert.rejects(() => stt.execute({ audio: join(dir, 'nope.mp3') }, exec), /音频文件不存在/)
   await assert.rejects(() => stt.execute({ audio: audioFile, engine: 'bing' }, exec), /engine 必须是/)
+})
+
+test('voice_stt：没要 output 时不硬塞落盘路径', () => {
+  const stt = buildVoiceTools(cfg).find((t) => t.name === 'voice_stt')
+  const text = stt.output.render({}, { text: '转写结果', model: 'whisper-large-v3-turbo', transcriptFile: '' })[0].text
+  assert.doesNotMatch(text, /已写入/)
 })
 
 test('execute 返回值可 JSON 序列化', async () => {

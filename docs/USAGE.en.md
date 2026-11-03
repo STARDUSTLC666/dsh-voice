@@ -69,6 +69,18 @@ voice_health {}                                              # self-check TTS / 
 - **The key only goes to the configured endpoint**: ASR always uses `asrBaseUrl` from config (the groq/openai presets are defaults only); an `engine` argument that differs from config is rejected instead of shipping the key to another vendor.
 - Protocol aligned with current open-source edge-tts (7.x) — no reliance on the outdated token endpoint
 
+## Troubleshooting
+
+Run `voice_health` first: it makes no network requests and reports the TTS voice, proxy and ASR engine/endpoint/key one by one. Every failing check carries its fix and states the impact (a missing key only breaks `voice_stt`; the three TTS tools keep working).
+
+- **Invalid voice id**: pick one from `voice_list` (ids look like `zh-CN-XiaoxiaoNeural`), or change `ttsVoice` in config and restart.
+- **TTS reports a network error**: Edge read-aloud is a third-party online service and needs internet access. Behind a corporate network or proxy, set `proxyUrl` to an http(s) proxy such as `http://127.0.0.1:7890`.
+- **STT reports a missing key or endpoint**: set `DSH_VOICE_ASR_KEY` (recommended; keeps the key out of config files) or configure `asrApiKey`. With `asrEngine: custom` you must also provide `asrBaseUrl`.
+- **STT says the audio is missing or out of scope**: `audio` and every output must stay inside the current session workspace; copy outside recordings in first.
+- **Transcription refused with a 3xx**: the plugin stops instead of posting audio to the redirect target. Set `asrBaseUrl` to the trusted final endpoint.
+- **Same-name output was not overwritten**: with `overwrite: false` (default) the file is suffixed; use the `output` / `transcriptFile` the tool returned.
+- **Timeouts**: `timeoutMs` defaults to 60000, clamped to 5000-600000; raise it for large files or slow services.
+
 ## Development
 
 ```bash
