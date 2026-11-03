@@ -29,9 +29,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-updates.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm run build && node --test \"test/*.test.mjs\"",
-    "test:integration": "pnpm run build && node --test \"integration/*.test.mjs\"",
-    "prepublishOnly": "pnpm run build"
+    "test": "npm run build && node --test \"test/*.test.mjs\"",
+    "test:integration": "npm run build && node --test \"integration/*.test.mjs\"",
+    "prepublishOnly": "npm run build"
   },
   "dsh": {
     "bundle": {
