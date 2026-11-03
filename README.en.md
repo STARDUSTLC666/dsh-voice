@@ -1,32 +1,35 @@
-# dsh-voice
+[简体中文](README.md) · **English**
 
-[中文](README.md)
+# Voice
 
-![dsh-voice whale girl plugin cover](https://raw.githubusercontent.com/STARDUSTLC666/dsh-voice/master/assets/cover-whale-girl.png)
-
-Generate speech or transcribe workspace recordings from DSH. Supports Edge TTS and OpenAI, Groq or custom compatible ASR; transcription uses your configured endpoint and output files avoid overwriting by default.
+**Turn text into speech and recordings into text.**
 
 [![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice) [![total downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-total-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
 
-[Download statistics](https://github.com/STARDUSTLC666/dsh-suite/blob/npm-downloads/README.md)
+**[Install](#install) · [Workflow](#start-using-it) · [Full guide](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/REFERENCE.en.md)**
 
-Feedback and contributions are welcome: report [issues](https://github.com/STARDUSTLC666/dsh-voice/issues) or submit [pull requests](https://github.com/STARDUSTLC666/dsh-voice/pulls).
+<picture>
+  <source media="(prefers-color-scheme: dark) and (max-width: 640px)" srcset="https://raw.githubusercontent.com/STARDUSTLC666/dsh-voice/master/docs/assets/intro/workflow-en-mobile-dark.svg">
+  <source media="(max-width: 640px)" srcset="https://raw.githubusercontent.com/STARDUSTLC666/dsh-voice/master/docs/assets/intro/workflow-en-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/STARDUSTLC666/dsh-voice/master/docs/assets/intro/workflow-en-dark.svg">
+  <img src="https://raw.githubusercontent.com/STARDUSTLC666/dsh-voice/master/docs/assets/intro/workflow-en-light.svg" alt="Turn text into speech and recordings into text. · workflow illustration" width="100%">
+</picture>
 
-## What it does
+## Features
 
-- Generate speech using the Edge online read-aloud service.
-- List voices and generate batch voice previews.
-- Transcribe audio using an OpenAI-compatible ASR endpoint.
+- Choose a voice and speed with a short sample.
+- Keep audio files you can play or deliver.
+- Transcribe with your configured compatible ASR service.
 
 ## Install
 
-In DSH Desktop, install `dsh-voice` from the Plugins panel. If the bundled dsh command is available:
+Open **Plugins** in the DSH desktop app and install `dsh-voice`. If the CLI is available:
 
 ```bash
 dsh plugin --profile desktop add dsh-voice
 ```
 
-For the web version, replace `desktop` with `web`. Restart DSH after installation.
+For the web profile, replace `desktop` with `web`. Restart that DSH profile after installation. The package’s DSH requirement is `>=0.2.1-rc.3`.
 
 ## Start using it
 
@@ -35,25 +38,33 @@ For the web version, replace `desktop` with `web`. Restart DSH after installatio
 3. Listen to the sample, generate the complete audio, then play or deliver the returned file.
 4. For transcription, configure your own compatible ASR service, provide a local audio file, then review the transcript.
 
-## Requirements and configuration
+Example request：
 
-Speech synthesis requires network access. Transcription needs an ASR endpoint and key. A plugin-specific proxy can be configured.
+> Make a Chinese MP3 from this text. Start with a short voice sample.
 
-Detailed configuration, tool arguments and troubleshooting are in the [usage guide](docs/USAGE.en.md). For standalone development, follow the Node requirement in [package.json](package.json).
+## Before you start
 
-## Documentation
+Edge speech requires a network connection; ASR needs your own service configuration.
 
-- [Usage and troubleshooting](docs/USAGE.en.md)
-- [Changelog](CHANGELOG.md)
-- [Validation scope and history](docs/VALIDATION.md)
-- [Report a problem or suggest a feature](https://github.com/STARDUSTLC666/dsh-voice/issues)
+Configuration, detailed tools and troubleshooting: [full reference](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/REFERENCE.en.md).
 
 ## Plugin updates
 
-Requires DSH 0.2.1-rc.3 or newer. Update controls sit at the bottom of the existing workbench, or native plugin details for plugins without a workbench. Checks, release notes and preferences expand in place, with no separate update page or settings menu. Automatic checks are on by default; **automatic installation is off by default**. Only explicit opt-in permits compatible stable patches while idle with no unsaved changes. Preferences are independent, with per-plugin disable, deferral and ignore controls. No forced DSH restart or upgrade, and local-source installations stay unchanged. Suite components explain and operate on the whole Suite in the same footer.
+Check updates at the bottom of the workbench or native plugin details. Automatic checks are on by default; **automatic installation is off**. You choose whether to install and when to restart. Suite-managed components update with their bundle. [Update behavior](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/REFERENCE.en.md).
 
-Older releases need one manual update in native plugin management to acquire these controls. Publishing to npm does not replace an existing user installation.
+## Documentation
+
+- [Full usage, configuration and limits](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/REFERENCE.en.md)
+- [Release notes](https://github.com/STARDUSTLC666/dsh-voice/blob/master/CHANGELOG.md)
+- [Validation scope and history](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/VALIDATION.md)
+
+## Feedback and contributions
+
+If the plugin helps, a Star makes it easier for others to discover. Report problems or suggest improvements in [Issues](https://github.com/STARDUSTLC666/dsh-voice/issues); code and documentation [PRs](https://github.com/STARDUSTLC666/dsh-voice/pulls) are welcome. Include versions and reproduction steps, and remove credentials from reports.
 
 ## License
 
-Original code: [MIT](LICENSE). The separate Edge v2 token module is LGPLv3; its source and license are included. See [third-party notices](THIRD_PARTY_NOTICES.md).
+[MIT AND LGPL-3.0-only](https://github.com/STARDUSTLC666/dsh-voice/blob/master/LICENSE)
+
+<a id="what-it-does"></a>
+<a id="requirements-and-configuration"></a>

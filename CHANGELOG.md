@@ -1,9 +1,16 @@
 # 更新记录
 
-## 0.5.4 (2026-11-03)
+## 0.5.5 (2026-11-03)
 
 - voice_stt 显示落盘路径；voice_health 失败项带 hint 与影响面；使用说明补齐排错。
 - voice_stt reports the transcript path, voice_health adds hints and scope, and troubleshooting docs are added.
+
+## 0.5.4 (2026-10-30)
+
+- 重整中英文首页：用途、三步流程图、安装入口与操作示例；详细配置与边界集中到完整说明。
+- 保留下载统计、独立更新选择、问题反馈和贡献入口；原封面与运行功能保留。
+- Refresh bilingual landing pages, workflow artwork, quick starts and reference navigation.
+
 
 ## 0.5.3 (2026-10-30)
 
