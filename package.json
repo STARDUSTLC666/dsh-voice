@@ -1,6 +1,6 @@
 {
   "name": "dsh-voice",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "DSH 语音工具：Edge TTS 朗读、兼容 ASR 转写、工作区文件保护与并发输出。欢迎提交 issues 和 PR。",
   "type": "module",
   "main": "lib/index.js",
@@ -59,7 +59,7 @@
   "license": "MIT AND LGPL-3.0-only",
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": ">=0.2.1-rc.3"
+    "dsh": ">=0.2.2-rc.3"
   },
   "dependencies": {
     "https-proxy-agent": "^9.1.0",
