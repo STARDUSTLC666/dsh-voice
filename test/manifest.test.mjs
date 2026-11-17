@@ -19,9 +19,23 @@ test('cordis.patch.yml 插入行名为 dsh-voice', () => {
   assert.match(patch, /- insert:/)
 })
 
-test('名称与版本', () => {
+test('名称与版本', async () => {
   const pkg = require('../package.json')
   assert.equal(pkg.name, 'dsh-voice')
   assert.match(pkg.version, /^\d+\.\d+\.\d+$/)
   assert.ok(pkg.files.includes('README.en.md'))
+  assert.equal(pkg.dsh.manifestVersion, 1)
+  assert.equal(pkg.exports['./locale/*.json'], './locale/*.json')
+  assert.ok(existsSync(new URL('../locale/zh.json', import.meta.url)))
+  assert.ok(existsSync(new URL('../locale/en.json', import.meta.url)))
+  const { apply } = await import('../lib/index.js')
+  const active = new Set()
+  const effects = []
+  apply({
+    tools: { register(def) { active.add(def.name); return () => active.delete(def.name) } },
+    effect(fn) { effects.push(fn()) },
+  }, {})
+  assert.equal(active.size, 5)
+  for (const dispose of effects) dispose?.()
+  assert.equal(active.size, 0)
 })

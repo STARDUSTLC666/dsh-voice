@@ -27,6 +27,7 @@ export interface VoiceToolDefinition {
     schema: Record<string, unknown>
     render(args: unknown, value: unknown): ContentBlock[]
   }
+  isConcurrencySafe?(args?: unknown): boolean
   execute(args: unknown, exec: unknown): Promise<unknown>
   timeoutMs?: number
 }
@@ -198,6 +199,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
 
   const voiceList: VoiceToolDefinition = {
     name: 'voice_list',
+    isConcurrencySafe: () => true,
     description: '列出常用语音合成音色（edge-tts 微软神经语音，免费）。含普通话/方言/粤语/英/日/韩/法/德/俄/西。voice_tts 的 voice 参数也接受清单外的合法 edge 音色 id（如 zh-CN-XXXNeural）。',
     parameters: compileParameters({}),
     output: {
@@ -393,6 +395,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
 
   const voiceHealth: VoiceToolDefinition = {
     name: 'voice_health',
+    isConcurrencySafe: () => true,
     description: 'dsh-voice 自检：检查 TTS 音色合法性、代理配置与 ASR 引擎/接口地址/密钥就绪状态（不发起网络请求）。遇到问题时先运行本工具定位。',
     parameters: compileParameters({}),
     output: {

@@ -14,9 +14,13 @@ export declare const name = "voice";
 export declare const inject: string[];
 /** 插件所需的最小 ctx 面。 */
 export interface VoicePluginContext {
+    logger?: {
+        warn?(message: string, ...args: unknown[]): void;
+    };
     tools: {
         register(definition: VoiceToolDefinition): () => void;
     };
+    effect?(effect: () => () => void, label?: string): unknown;
     on?(event: string, listener: () => void): () => void;
 }
 /**
