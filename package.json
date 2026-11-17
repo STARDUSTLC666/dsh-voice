@@ -1,6 +1,6 @@
 {
   "name": "dsh-voice",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "description": "DeepSeek Harness 语音插件：零密钥 Edge TTS 朗读、音色试听、兼容 ASR 转写与工作区输出保护。欢迎提交 issues 和 PR。",
   "type": "module",
   "main": "lib/index.js",
@@ -53,7 +53,12 @@
     "stt",
     "whisper",
     "voice",
-    "dsh-plugin"
+    "dsh-plugin",
+    "deepseek",
+    "ai-agent",
+    "edge-tts",
+    "语音合成",
+    "语音识别"
   ],
   "license": "MIT AND LGPL-3.0-only",
   "engines": {
@@ -64,7 +69,7 @@
     "https-proxy-agent": "^9.1.0",
     "undici": "^8.10.0",
     "ws": "^8.21.3",
-    "@stardustlc/dsh-updates": "0.2.1"
+    "@stardustlc/dsh-updates": "0.2.2"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
