@@ -1,6 +1,6 @@
 {
   "name": "dsh-voice",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "description": "DSH 语音工具：Edge TTS 朗读、兼容 ASR 转写、工作区文件保护与并发输出。欢迎提交 issues 和 PR。",
   "type": "module",
   "main": "lib/index.js",
@@ -38,12 +38,7 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-client-ui-settings",
-        "@deepseek-ai/dsh-client-ui-layout",
-        "@deepseek-ai/dsh-client-ui-sidebar"
-      ]
+      "platform": "web"
     }
   },
   "keywords": [
@@ -65,7 +60,7 @@
     "https-proxy-agent": "^9.1.0",
     "undici": "^8.10.0",
     "ws": "^8.21.3",
-    "@stardustlc/dsh-updates": "0.1.4"
+    "@stardustlc/dsh-updates": "0.2.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
