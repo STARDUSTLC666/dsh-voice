@@ -4,6 +4,8 @@
 
 **Turn text into speech and recordings into text.**
 
+Voice plugin for DeepSeek Harness (`>=0.2.2-rc.3`): provides keyless Edge neural text-to-speech (TTS), short voice previews, and OpenAI/Groq-compatible speech-to-text (STT) bounded to the workspace.
+
 [![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice) [![total downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-total-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
 
 **[Install](#install) · [Workflow](#start-using-it) · [Full guide](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/REFERENCE.en.md)**

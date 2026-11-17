@@ -4,6 +4,8 @@
 
 **把文字变成声音，把录音变成文字。**
 
+DeepSeek Harness（`>=0.2.2-rc.3`）语音插件：提供零密钥 Edge 神经网络语音合成（TTS）、短试听音色预览以及 OpenAI/Groq 兼容语音转文字（STT），输出严格限定在工作区路径内。
+
 [![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice) [![total downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-total-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
 
 **[安装使用](#安装) · [使用流程](#开始使用) · [完整说明](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/REFERENCE.zh.md)**
