@@ -10,6 +10,7 @@
 import { type VoiceConfig } from './config.js';
 import { type VoiceToolDefinition } from './tools.js';
 /** cordis 服务注入：apply 里要用 ctx.tools，必须显式声明。 */
+export declare const Config: import("./host-config.js").HostSchemaNode<VoiceConfig>;
 export declare const name = "voice";
 export declare const inject: string[];
 /** 插件所需的最小 ctx 面。 */
@@ -28,6 +29,7 @@ export interface VoicePluginContext {
  */
 export declare function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): void;
 export * from './config.js';
+export { liveConfig, createVolatile, HostValidationError, type HostSchemaNode, type HostSchemaMeta, type VolatileRef } from './host-config.js';
 export * from './edge-tts.js';
 export * from './paths.js';
 export * from './proxy-fetch.js';

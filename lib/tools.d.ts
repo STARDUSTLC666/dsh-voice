@@ -31,6 +31,6 @@ export interface VoiceToolDeps {
     stt?: typeof transcribe;
 }
 /**
- * 构建三个工具定义。
+ * 构建五个语音工具定义（支持静态配置对象或活引用配置 getter）。
  */
-export declare function buildVoiceTools(config: ResolvedVoiceConfig, deps?: VoiceToolDeps): VoiceToolDefinition[];
+export declare function buildVoiceTools(config: ResolvedVoiceConfig | (() => ResolvedVoiceConfig), deps?: VoiceToolDeps): VoiceToolDefinition[];

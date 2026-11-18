@@ -2,93 +2,99 @@
 
 [返回简介](../README.md) · [更新记录](../CHANGELOG.md) · [验证记录](VALIDATION.md)
 
-## 本次改进
+## 最快 3 步用起来
 
-转写失败时检查 ASR 地址、密钥与响应格式；空白识别结果不会作为成功转写保存。TTS 与 ASR 的外部服务可用性应分别核对。
+### 第 1 步：了解零配置范围与可选 ASR 配置
 
-## 安装
-
-```bash
-dsh plugin --profile web add dsh-voice
-```
-
-## 卸载
-
-```bash
-dsh plugin --profile web remove dsh-voice
-```
-
-卸载后重启 Web 服务。如需彻底清理，可再手动删除自己 profile `cordis.patch.yml` 中覆盖的插件行。
-
-## 配置
-
-`voice_tts` 零配置可用；`voice_stt` 需要 ASR 密钥：
+- **文字转语音（`voice_tts` / `voice_list` / `voice_preview`）零配置即用**：无需申请任何 API 密钥，安装后联网即可试听音色与合成 MP3。
+- **录音转文字（`voice_stt`）按需填密钥**：
+  - **推荐方式**：打开 **DSH → 设置 → 插件 → 语音（`dsh-voice`）**，选择 `asrEngine`（默认 `groq`，也可选 `openai` 或 `custom`），填入 `asrApiKey`（自动脱敏，**保存立即生效、无需重启**）；
+  - **命令行 / 环境变量方式**：设置环境变量 `DSH_VOICE_ASR_KEY`，或在 `cordis.patch.yml` 中配置：
 
 ```yaml
 - id: voice
   name: 'dsh-voice'
   config:
+    ttsVoice: zh-CN-XiaoxiaoNeural        # 默认朗读音色（保存即生效）
+    ttsRate: '+0%'                        # 默认语速，如 +15% 或 -10%
+    ttsPitch: '+0Hz'                      # 默认音调，如 +2Hz 或 -1Hz
     asrEngine: groq                       # groq | openai | custom
-    asrModel: whisper-large-v3-turbo      # groq 的 whisper 模型
-    # asrApiKey: gsk_...                  # 推荐改用环境变量 DSH_VOICE_ASR_KEY
-    ttsVoice: zh-CN-XiaoxiaoNeural        # 默认音色
-    # proxyUrl: http://127.0.0.1:7890     # ASR 接口需要特殊代理时启用
+    asrModel: whisper-large-v3-turbo      # 可选；留空按引擎预设自动填入
+    # asrApiKey: gsk_...                  # 推荐在 DSH 设置页填写或用环境变量 DSH_VOICE_ASR_KEY
+    # proxyUrl: http://127.0.0.1:7890     # 网络需要 HTTP(S) 代理时填写
 ```
 
-## 工具一览
+### 第 2 步：在工作区内准备文稿或录音
 
-| 工具 | 作用 | 关键参数 |
-| :-- | :-- | :-- |
-| `voice_tts` | 文字合成 MP3（Edge 在线服务） | `text` 必填；`voice`/`rate`/`pitch`/`output` 可选 |
-| `voice_stt` | 音频转文字 | `audio` 必填；`model`/`language`/`prompt`/`output` 可选；`engine` 只能与配置 `asrEngine` 相同 |
-| `voice_list` | 常用音色清单 | 无 |
-| `voice_preview` | 音色试听：批量生成短样例 MP3 | `voices`（≤8 个）/ `text` / `outputDir` 可选 |
-| `voice_health` | 配置自检（不联网） | 无 |
+为了防止路径越界读取隐私文件，所有待转写音频与生成的 MP3 / `.txt` 都严格限制在**当前会话工作区**内；外部录音请先复制进工作区目录。
 
-### 示例
+### 第 3 步：试听选定音色，合成配音或转写纪要
 
-```text
-voice_tts { text: 今天的 AI 早报来了 }                    # 晓晓女声，输出 voice_output.mp3
-voice_tts { text: hello, voice: en-US-AriaNeural }        # 英文女声
-voice_stt { audio: meeting.mp3, language: zh }           # 转写会话工作区里的录音
-voice_list {}
-voice_preview { voices: [zh-CN-XiaoxiaoNeural, en-US-AriaNeural] } # 生成两个试听样例
-voice_health {}                                          # 自检 TTS / ASR / 代理配置
-```
+不确定哪个声音好听时，先让助手生成几段 3 秒短试听样例对比，再一键合成正式音频。
 
-## 实现与文件限制
+---
 
-- **edge-tts 协议直连**：对齐开源 edge-tts 7.3.1 的 Sec-MS-GEC v2 协议，令牌在本地按 5 分钟窗口生成；WS 使用 `ws` 库与可选 HTTP CONNECT 代理。不是微软官方 SDK，服务协议仍可能变更。
-- **接口配置**：TTS 无需另填 API Key；STT 使用你配置的 ASR 服务，其计费与额度由该服务决定。
-- 文本 ≤5000 字符、音频 ≤25MB 前置校验（读入后再按实际字节数复查一次）；输出同名自动加序号
-- **读写都在会话工作区内**：`audio` 与 `output` / `outputDir` 解析后（含符号链接）必须落在 `session.header.cwd` 之下，越界直接报错。想转写工作区外的录音，先复制进来；输出同理
-- **不跟随符号链接写文件**：目标是符号链接（含悬空链接）时拒绝写入，新建文件用 `O_EXCL`，避免检查完再被换成链接
-- **转写文本 0600**：`voice_stt` 写出的 `.txt` 只给当前用户读写（Windows 不检查权限位）
-- **密钥只发给配置的地址**：ASR 请求地址一律取配置 `asrBaseUrl`（groq/openai 的预设只是缺省值），模型传的 `engine` 与配置不一致会直接报错，避免把密钥发到另一家的主机
-- **重定向需要用户确认地址**：接口返回 3xx 时停止，不向跳转地址发送音频。请检查服务文档，把 `asrBaseUrl` 设为可信的最终接口；这也适用于配置了插件代理的请求。
-- **并发生成不覆盖**：`overwrite=false` 时即使两个任务同时写同名文件，或合成期间出现用户同名文件，也会另存并返回实际文件名。显式覆盖只接受没有硬链接的普通文件。
-- Edge TTS 协议适配保留在插件实现中，不使用旧令牌端点。
+## 平时怎么对助手说（可直接复制的自然语言示例）
 
-## 排错
+- **批量短试听挑选音色（不盲猜 ID）**
+  > 先帮我看看常用中英文音色清单，挑 4 个风格不同的音色生成一段短试听 MP3 让我选。
+- **把文章或报告合成可播放的语音文件**
+  > 用 `zh-CN-YunxiNeural` 男声（语速 `+10%`）把这段产品更新说明合成到 `update-audio.mp3`。
+- **录音转写 + 专有名词纠偏 + 落盘存档**
+  > 把工作区里的 `interview.mp3` 转写成中文（提示词加上专有名词：DeepSeek Harness、Cordis），完整转写存进 `interview.txt`，并总结 5 条核心结论。
+- **不确定代理或密钥是否就绪时先自检**
+  > 跑一下语音插件自检，看看当前默认音色、代理和语音转文字密钥状态。
 
-先跑 `voice_health`：它不发网络请求，逐项报 TTS 音色、代理、ASR 引擎/地址/密钥；失败项带修复动作，并说明影响面（缺密钥只影响 `voice_stt`，三个 TTS 工具照常可用）。
+---
 
-- **音色不合法**：用 `voice_list` 挑清单内 id（形如 `zh-CN-XiaoxiaoNeural`），或改配置 `ttsVoice` 后重启。
-- **TTS 报网络错误**：Edge 朗读是第三方在线服务，需要能访问外网；公司网络或代理下配置 `proxyUrl`（例如 `http://127.0.0.1:7890`）。
-- **STT 报缺密钥/接口地址**：设环境变量 `DSH_VOICE_ASR_KEY`（推荐，不落配置文件）或配置 `asrApiKey`；`asrEngine: custom` 时必须给 `asrBaseUrl`。
-- **STT 报音频不存在或越界**：`audio` 与本插件的所有输出都必须落在当前会话工作区内，工作区外的录音先复制进来。
-- **转写被拒（3xx）**：接口返回重定向时插件会停止，不向跳转地址发送音频；请把 `asrBaseUrl` 设为可信的最终接口地址。
-- **同名输出没被覆盖**：`overwrite: false`（默认）下自动加序号，请以工具返回的 `output` / `transcriptFile` 为准。
-- **超时**：`timeoutMs` 默认 60000，最小 5000、最大 600000；大文件或慢服务调大它。
+## 常见卡点自检
 
-## 开发
+遇到问题先让助手执行 `voice_health`（纯本地检查，不发起网络请求，并明确区分哪些问题只影响 `voice_stt`）：
+
+| 现象 | 常见原因 | 一步修复 |
+| :--- | :--- | :--- |
+| 自检提示「缺 ASR 密钥」 | 尚未填写 `asrApiKey` 且未设 `DSH_VOICE_ASR_KEY` | 若只需朗读配音可忽略（`voice_tts` 不需要密钥）；若需转写录音，在 **DSH「设置 → 插件 → 语音」**填入 `asrApiKey` 保存即生效 |
+| 提示音色 ID 不合法 | `ttsVoice` 拼写不符合 Edge 神经音色格式 | 让助手运行 `voice_list` 查看合法 ID（如 `zh-CN-XiaoxiaoNeural`），在设置页更新 `ttsVoice` |
+| `voice_tts` 或 `voice_stt` 报网络失败 | 当前网络无法直连 Edge 朗读服务或外网 ASR 接口 | 在 **DSH「设置 → 插件 → 语音」**填写 `proxyUrl`（如 `http://127.0.0.1:7890`，保存即生效） |
+| 提示文件必须位于会话工作区内 | 传入了工作区外部路径或越界符号链接 | 将录音复制到当前会话工作区文件夹内再执行 |
+| 音频超过 25MB 报超限 | OpenAI / Groq 兼容 ASR 单文件上限 25MB | 先用 `dsh-ffmpeg` 压低码率或分段裁剪后再转写 |
+| ASR 返回 3xx 重定向被拦截 | 为防音频与密钥被转发到第三方主机，插件拒绝自动跟随重定向 | 将 `asrBaseUrl` 直接改为服务商最终无跳转的 `/v1` 地址 |
+| 同名文件没有覆盖旧文件 | 默认 `overwrite: false` 防误删，自动追加 `_1`、`_2` 序号 | 查看工具返回的实际落盘路径，或在设置中显式开启 `overwrite` |
+
+---
+
+## 工具与安全边界参考
+
+### 注册工具清单（共 5 个）
+
+| 工具 | 作用 | 关键参数与说明 |
+| :--- | :--- | :--- |
+| `voice_tts` | 文字合成 MP3（零密钥 Edge 在线神经语音） | `text` 必填（≤5000 字符）；`voice` / `rate` / `pitch` / `output` 可选 |
+| `voice_stt` | 音频转文字（Groq / OpenAI / 自定义兼容端点） | `audio` 必填（≤25MB）；`model` / `language` / `prompt` / `output` 可选 |
+| `voice_list` | 查看内置常用多语种与方言音色目录 | 无参数 |
+| `voice_preview` | 有界并发（最多 3 路）批量生成短试听 MP3 | `voices`（最多 8 个）/ `text`（≤200 字）/ `outputDir` 可选 |
+| `voice_health` | 本地配置自检（不触网） | 逐项检查默认音色、代理、ASR 引擎/地址/密钥与影响面 |
+
+### 安全与文件保护细节
+
+- **工作区沙箱与符号链接防护**：所有读写路径解析后必须位于 `session.header.cwd` 内；拒绝跟随符号链接覆写，新建文件使用 `O_EXCL` 防止并发竞态覆盖，转写 `.txt` 在类 Unix 系统以 `0600` 权限写入。
+- **防凭据串台与防重定向泄露**：ASR 请求固定发往配置的 `asrBaseUrl`，拒绝模型调用时用 `engine` 临时切到其他厂商，且遇 `3xx` 重定向立即中止上传。
+- **随时可取消**：`voice_tts`、`voice_preview` 与 `voice_stt` 全程透传 `exec.signal`，用户点击停止即刻关闭 WebSocket 或中止上传。
+
+## 安装、卸载与开发
 
 ```bash
+# 安装（桌面版把 web 换为 desktop）
+dsh plugin --profile web add dsh-voice
+
+# 卸载
+dsh plugin --profile web remove dsh-voice
+
+# 本地构建与离线单元测试
 pnpm install
-pnpm test       # 构建 + 离线单元测试（使用模拟的 TTS/ASR）
-pnpm test:integration  # 显式联网，调用真实 edge-tts；网络或断言失败均报错
+pnpm test
 ```
 
 ## License
 
-主体 MIT；独立的 Edge v2 令牌模块 LGPLv3，见[第三方声明](../THIRD_PARTY_NOTICES.md)。
+主体代码采用 MIT；独立的 Edge v2 令牌计算模块遵循 LGPL-3.0-only，详见 [第三方声明](../THIRD_PARTY_NOTICES.md)。

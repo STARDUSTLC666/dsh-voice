@@ -10,9 +10,11 @@ import { registerUpdates } from '@stardustlc/dsh-updates'
  */
 
 import { resolveConfig, type VoiceConfig } from './config.js'
+import { Config as VoiceConfigSchema, liveConfig } from './host-config.js'
 import { buildVoiceTools, type VoiceToolDefinition } from './tools.js'
 
 /** cordis 服务注入：apply 里要用 ctx.tools，必须显式声明。 */
+export const Config = VoiceConfigSchema
 export const name = 'voice'
 export const inject = ['tools']
 
@@ -35,16 +37,20 @@ export function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): voi
     else console.warn(message)
   }
 
-  let cfg
-  try {
-    cfg = resolveConfig(config)
-  } catch (error) {
-    warn('[dsh-voice] ' + (error instanceof Error ? error.message : String(error)))
-    cfg = resolveConfig(null)
+  const live = liveConfig((config ?? {}) as VoiceConfig)
+  const readCfg = () => {
+    try {
+      return resolveConfig(live, (msg) => warn('[dsh-voice] ' + msg))
+    } catch (error) {
+      warn('[dsh-voice] ' + (error instanceof Error ? error.message : String(error)))
+      return resolveConfig(null, (msg) => warn('[dsh-voice] ' + msg))
+    }
   }
+  // 启动期跑一次校验，触发必要的告警但绝不阻断注册。
+  readCfg()
 
   const disposers: Array<() => void> = []
-  for (const definition of buildVoiceTools(cfg)) {
+  for (const definition of buildVoiceTools(readCfg)) {
     disposers.push(ctx.tools.register(definition))
   }
   const teardown = () => {
@@ -58,6 +64,7 @@ export function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): voi
 }
 
 export * from './config.js'
+export { liveConfig, createVolatile, HostValidationError, type HostSchemaNode, type HostSchemaMeta, type VolatileRef } from './host-config.js'
 export * from './edge-tts.js'
 export * from './paths.js'
 export * from './proxy-fetch.js'

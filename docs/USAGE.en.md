@@ -1,94 +1,100 @@
-# dsh-voice usage guide
+# dsh-voice Usage Guide
 
 [Overview](../README.en.md) · [Changelog](../CHANGELOG.md) · [Validation](VALIDATION.md)
 
-## Current improvements
+## Get Started in 3 Steps
 
-ASR stops on redirects instead of forwarding audio to another endpoint, including through the plugin proxy. Set `asrBaseUrl` to the trusted final API address. With `overwrite=false`, concurrent outputs are saved separately and tools return the actual saved path. Explicit overwrite requires a regular file with no hard links.
+### Step 1: Know What Works Out of the Box vs. Optional ASR Setup
 
-Check the ASR endpoint, key and response format after a failure. Blank results are not saved as successful transcripts. Verify TTS and ASR service availability separately.
-
-## Installation
-
-```bash
-dsh plugin --profile web add dsh-voice
-```
-
-## Uninstall
-
-```bash
-dsh plugin --profile web remove dsh-voice
-```
-
-Then restart the web service. To clean up fully, also remove the plugin entry from your profile `cordis.patch.yml` if you overrode it.
-
-## Configuration
-
-`voice_tts` works with zero config; `voice_stt` needs an ASR key:
+- **Text-to-speech (`voice_tts`, `voice_list`, `voice_preview`) works with zero config**: No API keys needed — install the plugin and synthesize speech or audition voices right away.
+- **Speech-to-text (`voice_stt`) needs an ASR key when you want transcription**:
+  - **Recommended**: Open **DSH → Settings → Plugins → Voice (`dsh-voice`)**, pick `asrEngine` (`groq` by default, `openai`, or `custom`), and paste `asrApiKey` (masked and **applied live on save without restarting**);
+  - **CLI / Environment variable**: Set `DSH_VOICE_ASR_KEY` or configure `cordis.patch.yml`:
 
 ```yaml
 - id: voice
   name: 'dsh-voice'
   config:
+    ttsVoice: zh-CN-XiaoxiaoNeural        # default voice (applies live)
+    ttsRate: '+0%'                        # default speech rate, e.g. +15% or -10%
+    ttsPitch: '+0Hz'                      # default pitch, e.g. +2Hz or -1Hz
     asrEngine: groq                       # groq | openai | custom
-    asrModel: whisper-large-v3-turbo      # Groq whisper model
-    # asrApiKey: gsk_...                  # prefer env var DSH_VOICE_ASR_KEY
-    ttsVoice: zh-CN-XiaoxiaoNeural        # default voice
-    # proxyUrl: http://127.0.0.1:7890     # enable when the ASR endpoint needs a special proxy
+    asrModel: whisper-large-v3-turbo      # optional; defaults to engine preset
+    # asrApiKey: gsk_...                  # prefer DSH Settings or env var DSH_VOICE_ASR_KEY
+    # proxyUrl: http://127.0.0.1:7890     # optional HTTP(S) proxy URL
 ```
 
-## Tools
+### Step 2: Keep Audio & Outputs Inside Your Session Workspace
 
-| Tool | Purpose | Key parameters |
-| :-- | :-- | :-- |
-| `voice_tts` | Synthesize MP3 from text (Edge online service) | `text` required; `voice`/`rate`/`pitch`/`output` optional |
-| `voice_stt` | Transcribe audio to text | `audio` required; `model`/`language`/`prompt`/`output` optional; `engine` may only repeat the configured `asrEngine` |
-| `voice_list` | Curated voice catalog | none |
-| `voice_preview` | Batch-generate short preview MP3s | optional `voices` (≤8) / `text` / `outputDir` |
-| `voice_health` | Offline config self-check | none |
+All input audio and output MP3 / `.txt` files must resolve under the active DSH session workspace (`session.header.cwd`) to protect host files. Copy outside recordings into the workspace first.
 
-### Examples
+### Step 3: Audition Voices, Then Synthesize or Transcribe
 
-```text
-voice_tts { text: hello world }                              # outputs voice_output.mp3
-voice_tts { text: hello, voice: en-US-AriaNeural }           # English female voice
-voice_stt { audio: meeting.mp3, language: zh }               # transcribe a recording inside the session workspace
-voice_list {}
-voice_preview { voices: [zh-CN-XiaoxiaoNeural, en-US-AriaNeural] } # generate two preview samples
-voice_health {}                                              # self-check TTS / ASR / proxy config
-```
+Unsure which voice fits best? Ask the assistant to generate short preview samples in parallel before rendering your full script.
 
-## Implementation and file limits
+---
 
-- **Direct edge-tts protocol**: follows open-source edge-tts 7.3.1 Sec-MS-GEC v2, generating tokens locally in five-minute windows. Uses `ws` and optional HTTP CONNECT. This is not a Microsoft SDK, and the service protocol may change.
-- **API configuration**: TTS needs no separate API key. STT uses your configured ASR service, whose pricing and limits apply.
-- Up-front validation: text ≤ 5000 chars, audio ≤ 25MB (re-checked against the bytes actually read); same-name outputs auto-suffixed
-- **Reads and writes stay inside the session workspace**: `audio`, `output` and `outputDir` must resolve (symlinks included) under `session.header.cwd`; anything outside is rejected. Copy the file in first.
-- **Symlinks are never written through**: a target that is a symlink (including a dangling one) is refused, and new files are created with `O_EXCL`.
-- **Transcripts are 0600**: the `.txt` written by `voice_stt` is owner-only (Windows does not enforce the mode bits).
-- **The key only goes to the configured endpoint**: ASR always uses `asrBaseUrl` from config (the groq/openai presets are defaults only); an `engine` argument that differs from config is rejected instead of shipping the key to another vendor.
-- Protocol aligned with current open-source edge-tts (7.x) — no reliance on the outdated token endpoint
+## Copy-Ready Prompts for Everyday Work
 
-## Troubleshooting
+- **Audition voices before committing to a full render**
+  > List the built-in voices and generate short preview MP3s for 4 distinct voices so I can choose my favorite.
+- **Render a polished voiceover MP3**
+  > Synthesize this release summary into `release-note.mp3` using `en-US-AriaNeural` at `+10%` speed.
+- **Transcribe a recording with domain terminology hints**
+  > Transcribe `interview.mp3` in this workspace (prompt hint: DeepSeek Harness, Cordis), save the full text to `interview.txt`, and list the 5 key takeaways.
+- **Offline configuration self-check**
+  > Run a voice health check to verify my default TTS voice, proxy, and ASR key status.
 
-Run `voice_health` first: it makes no network requests and reports the TTS voice, proxy and ASR engine/endpoint/key one by one. Every failing check carries its fix and states the impact (a missing key only breaks `voice_stt`; the three TTS tools keep working).
+---
 
-- **Invalid voice id**: pick one from `voice_list` (ids look like `zh-CN-XiaoxiaoNeural`), or change `ttsVoice` in config and restart.
-- **TTS reports a network error**: Edge read-aloud is a third-party online service and needs internet access. Behind a corporate network or proxy, set `proxyUrl` to an http(s) proxy such as `http://127.0.0.1:7890`.
-- **STT reports a missing key or endpoint**: set `DSH_VOICE_ASR_KEY` (recommended; keeps the key out of config files) or configure `asrApiKey`. With `asrEngine: custom` you must also provide `asrBaseUrl`.
-- **STT says the audio is missing or out of scope**: `audio` and every output must stay inside the current session workspace; copy outside recordings in first.
-- **Transcription refused with a 3xx**: the plugin stops instead of posting audio to the redirect target. Set `asrBaseUrl` to the trusted final endpoint.
-- **Same-name output was not overwritten**: with `overwrite: false` (default) the file is suffixed; use the `output` / `transcriptFile` the tool returned.
-- **Timeouts**: `timeoutMs` defaults to 60000, clamped to 5000-600000; raise it for large files or slow services.
+## Quick Troubleshooting Checklist
 
-## Development
+Run `voice_health` first (offline check with zero network traffic that clearly separates `voice_stt`-only issues from TTS):
+
+| Symptom | Usual Cause | Quick Fix |
+| :--- | :--- | :--- |
+| Health check says `asrApiKey` is missing | `asrApiKey` and `DSH_VOICE_ASR_KEY` are both empty | Safe to ignore if you only need TTS (`voice_tts` needs no key); for transcription, fill `asrApiKey` in **DSH Settings → Plugins → Voice** (applies live) |
+| Invalid voice ID error | `ttsVoice` does not match Edge neural voice format | Run `voice_list` to pick a valid ID (e.g. `zh-CN-XiaoxiaoNeural`) and update `ttsVoice` in Settings |
+| Network error on TTS or STT | Direct connection blocked by corporate network | Enter an HTTP(S) `proxyUrl` (e.g. `http://127.0.0.1:7890`) in **DSH Settings → Plugins → Voice** (applies live) |
+| Path outside session workspace error | Audio or output path resolves outside workspace | Copy the recording into the current session workspace folder first |
+| Audio exceeds 25 MB limit | Standard Whisper / ASR multipart cap is 25 MB | Compress or split the recording with `dsh-ffmpeg` before transcribing |
+| ASR refuses a 3xx redirect | Redirects are blocked so audio/keys never leak to another host | Set `asrBaseUrl` directly to the final non-redirecting `/v1` endpoint |
+| Existing output file was not overwritten | `overwrite: false` (default) suffixes `_1`, `_2` safely | Use the exact path returned by the tool, or enable `overwrite` in Settings |
+
+---
+
+## Tool & Safety Reference
+
+### Registered Tools (All 5)
+
+| Tool | Purpose | Key Parameters & Notes |
+| :--- | :--- | :--- |
+| `voice_tts` | Synthesize MP3 from text (keyless Edge neural TTS) | `text` required (≤5000 chars); optional `voice`, `rate`, `pitch`, `output` |
+| `voice_stt` | Transcribe audio to text (Groq / OpenAI / custom) | `audio` required (≤25 MB); optional `model`, `language`, `prompt`, `output` |
+| `voice_list` | Browse curated multilingual & dialect voice catalog | No parameters |
+| `voice_preview` | Bounded-concurrency (≤3) batch voice preview MP3s | Optional `voices` (≤8), `text` (≤200 chars), `outputDir` |
+| `voice_health` | Offline configuration self-check | Checks TTS voice, proxy, and ASR engine/endpoint/key |
+
+### Workspace & Credential Guardrails
+
+- **Workspace confinement & symlink protection**: All reads and writes stay under `session.header.cwd`, symlinks are never written through, new files use `O_EXCL`, and `.txt` transcripts use `0600` permissions on POSIX.
+- **Pinned endpoint & redirect block**: ASR requests only go to the configured `asrBaseUrl`, mismatched `engine` overrides are rejected, and `3xx` redirects abort immediately before sending audio.
+- **Instant cancellation**: `voice_tts`, `voice_preview`, and `voice_stt` propagate `exec.signal` to close WebSockets and abort uploads immediately on cancel.
+
+## Install, Uninstall & Development
 
 ```bash
+# Install (use desktop instead of web for DSH Desktop)
+dsh plugin --profile web add dsh-voice
+
+# Uninstall
+dsh plugin --profile web remove dsh-voice
+
+# Build & run offline unit tests
 pnpm install
-pnpm test       # build + offline unit tests with mocked TTS/ASR
-pnpm test:integration  # opt-in real edge-tts request; network and assertion errors fail
+pnpm test
 ```
 
 ## License
 
-Original code MIT; separate Edge v2 token module LGPLv3. See [third-party notices](../THIRD_PARTY_NOTICES.md).
+Original code MIT; separate Edge v2 token module LGPL-3.0-only. See [third-party notices](../THIRD_PARTY_NOTICES.md).

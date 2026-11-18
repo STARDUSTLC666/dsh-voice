@@ -53,8 +53,8 @@ function raceAbort<T>(value: T | PromiseLike<T>, signal: AbortSignal | undefined
 export async function transcribe(baseUrl: string, apiKey: string, options: SttOptions, fetchImpl: SttFetch = globalThis.fetch, timeoutMs = 120000, signal?: AbortSignal): Promise<{ text: string; model: string }> {
   const abortSignal = signal ?? options.signal
   throwIfAborted(abortSignal)
-  if (apiKey === '') throw new Error('未配置 ASR 密钥：请设置环境变量 DSH_VOICE_ASR_KEY，或在 cordis.patch.yml 的 asrApiKey 配置后重启。')
-  if (baseUrl === '') throw new Error('未配置 ASR 接口地址（asrEngine=custom 时必须提供 asrBaseUrl）。')
+  if (apiKey === '') throw new Error('未配置 ASR 密钥：可在 DSH「设置 → 插件 → 语音（dsh-voice）」直接填写 asrApiKey（保存即生效，无需重启），或设置环境变量 DSH_VOICE_ASR_KEY，或在 cordis.patch.yml 配置 asrApiKey。（注：文字转语音无需密钥即可直接使用。）')
+  if (baseUrl === '') throw new Error('未配置 ASR 接口地址：asrEngine=custom 时必须在 DSH「设置 → 插件 → 语音」或 cordis.patch.yml 提供 asrBaseUrl（或切回 groq / openai 预设）。')
   if (options.audio.length === 0) throw new Error('音频文件为空。')
   assertAudioSize(options.audio.length)
 
@@ -84,7 +84,7 @@ export async function transcribe(baseUrl: string, apiKey: string, options: SttOp
   } catch (error) {
     throwIfAborted(abortSignal)
     if (timeoutSignal.aborted) throw new Error('ASR 请求超时，请重试或缩短音频。')
-    throw new Error('ASR 请求失败：' + (error instanceof Error ? error.message : String(error)) + '。若接口需要特殊代理（梯子），请在 cordis.patch.yml 配置 proxyUrl 后重启。')
+    throw new Error('ASR 请求失败：' + (error instanceof Error ? error.message : String(error)) + '。若接口需要特殊代理（梯子），请在 DSH「设置 → 插件 → 语音」或 cordis.patch.yml 配置 proxyUrl（保存即生效）。')
   }
   if (response.status >= 300 && response.status < 400) {
     try { await raceAbort(response.body?.cancel(), requestSignal) } catch { /* 尽力释放响应，仍受请求超时限制。 */ }

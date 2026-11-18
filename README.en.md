@@ -2,13 +2,13 @@
 
 # Voice
 
-**Turn text into speech and recordings into text.**
+**Turn text into natural speech and recordings into clean transcripts.**
 
-Voice plugin for DeepSeek Harness (`>=0.2.2-rc.3`): provides keyless Edge neural text-to-speech (TTS), short voice previews, and OpenAI/Groq-compatible speech-to-text (STT) bounded to the workspace.
+Voice plugin for DeepSeek Harness (`>=0.2.2-rc.3`): provides zero-key Edge neural text-to-speech (TTS), batch voice previews, native live Settings forms with secret masking, and OpenAI/Groq-compatible speech-to-text (STT) strictly scoped to your session workspace.
 
 [![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice) [![total downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-total-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
 
-**[Install](#install) · [Workflow](#start-using-it) · [Full guide](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/REFERENCE.en.md)**
+**[Install](#install) · [Get Started in 3 Steps](#get-started-in-3-steps) · [Full Guide](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/USAGE.en.md)**
 
 <picture>
   <source media="(prefers-color-scheme: dark) and (max-width: 640px)" srcset="https://raw.githubusercontent.com/STARDUSTLC666/dsh-voice/master/docs/assets/intro/workflow-en-mobile-dark.svg">
@@ -17,52 +17,55 @@ Voice plugin for DeepSeek Harness (`>=0.2.2-rc.3`): provides keyless Edge neural
   <img src="https://raw.githubusercontent.com/STARDUSTLC666/dsh-voice/master/docs/assets/intro/workflow-en-light.svg" alt="Turn text into speech and recordings into text. · workflow illustration" width="100%">
 </picture>
 
-## Features
-
-- Choose a voice and speed with a short sample.
-- Keep audio files you can play or deliver.
-- Transcribe with your configured compatible ASR service.
-
 ## Install
 
-Open **Plugins** in the DSH desktop app and install `dsh-voice`. If the CLI is available:
+Open **Plugins** in the DSH desktop app and install `dsh-voice`, or use the CLI:
 
 ```bash
 dsh plugin --profile desktop add dsh-voice
 ```
 
-For the web profile, replace `desktop` with `web`. Restart that DSH profile after installation. The package’s DSH requirement is `>=0.2.2-rc.3`.
+For the web profile, replace `desktop` with `web`. Restart DSH once after installing. Requires DSH `>=0.2.2-rc.3`.
 
-## Start using it
+<a id="start-using-it"></a>
+## Get Started in 3 Steps
 
-1. Start a DSH session in the workspace where you want the audio saved; ask it to check the voice tools.
-2. Provide text, language, voice and speed, for example: “Make a Chinese MP3 from this text; give me a short sample first.”
-3. Listen to the sample, generate the complete audio, then play or deliver the returned file.
-4. For transcription, configure your own compatible ASR service, provide a local audio file, then review the transcript.
+1. **Read-aloud works out of the box (zero API keys)**: Open a DSH session in your target workspace and ask the assistant to preview voices or turn any script into an MP3 immediately.
+2. **Add an ASR key when you need transcription (applies live)**: Open **DSH Settings → Plugins → Voice (`dsh-voice`)** and enter your Groq or OpenAI-compatible `asrApiKey` (masked and applied immediately without restarting; `DSH_VOICE_ASR_KEY` env var is also supported).
+3. **Preview, synthesize, or transcribe inside your workspace**: Place recordings inside your session workspace; generated MP3s and `.txt` transcripts stay safely inside the workspace and auto-number instead of overwriting existing files.
 
-Example request：
+## Copy-Ready Prompts for Everyday Work
 
-> Make a Chinese MP3 from this text. Start with a short voice sample.
+- **Audition 3 voices first, then synthesize the full audio (zero config)**
+  > Generate short voice preview samples for 3 natural narration voices so I can listen first, then synthesize the full MP3 once I pick one.
+- **Turn a written briefing into a ready-to-play MP3**
+  > Condense today's notes into a 2-minute spoken script and generate `morning-brief.mp3` at `+10%` speed.
+- **Transcribe a meeting recording & extract action items**
+  > Transcribe `meeting.m4a` in this workspace, save the full transcript to `meeting.txt`, and list the action items.
 
-## Before you start
+## Quick Troubleshooting Checklist
 
-Edge speech requires a network connection; ASR needs your own service configuration.
-
-Configuration, detailed tools and troubleshooting: [full reference](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/REFERENCE.en.md).
+| Symptom | Likely Cause | Fix |
+| :--- | :--- | :--- |
+| Health check says `asrApiKey` is missing, but you only want TTS | ASR key is only needed for audio-to-text transcription | **Keep using TTS directly** — no key is required for speech synthesis or previews |
+| "Must stay inside the session workspace" error | Recording or output path points outside the workspace folder | Copy the audio file into the current DSH workspace folder first |
+| Network / connection error | Corporate firewall or proxy required to reach Edge TTS / ASR | Set `proxyUrl` (e.g. `http://127.0.0.1:7890`) in **DSH Settings → Plugins → Voice** (applies live) |
+| Audio exceeds 25 MB limit | Standard Whisper/ASR upload limit is 25 MB | Compress or split the audio with `dsh-ffmpeg` first, then transcribe |
 
 ## Plugin updates
 
-Check updates at the bottom of the workbench or native plugin details. Automatic checks are on by default; **automatic installation is off**. You choose whether to install and when to restart. Suite-managed components update with their bundle. [Update behavior](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/REFERENCE.en.md).
+Check updates at the bottom of native plugin details. Automatic checks are on by default; **automatic installation is off**. Suite-managed components update with their bundle.
 
 ## Documentation
 
-- [Full usage, configuration and limits](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/REFERENCE.en.md)
+- [Usage guide and configuration reference](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/USAGE.en.md)
+- [Full reference](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/REFERENCE.en.md)
 - [Release notes](https://github.com/STARDUSTLC666/dsh-voice/blob/master/CHANGELOG.md)
 - [Validation scope and history](https://github.com/STARDUSTLC666/dsh-voice/blob/master/docs/VALIDATION.md)
 
 ## Feedback and contributions
 
-If the plugin helps, a Star makes it easier for others to discover. Report problems or suggest improvements in [Issues](https://github.com/STARDUSTLC666/dsh-voice/issues); code and documentation [PRs](https://github.com/STARDUSTLC666/dsh-voice/pulls) are welcome. Include versions and reproduction steps, and remove credentials from reports.
+If the plugin helps, a Star makes it easier for others to discover. Report issues in [Issues](https://github.com/STARDUSTLC666/dsh-voice/issues) or open [PRs](https://github.com/STARDUSTLC666/dsh-voice/pulls) (please strip credentials).
 
 ## License
 

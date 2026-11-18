@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { isValidVoiceId, VOICES, assertAudioFile, resolveOutputPath, resolveConfig } from '../lib/index.js'
+import { apply, Config, liveConfig, isValidVoiceId, VOICES, assertAudioFile, resolveOutputPath, resolveConfig } from '../lib/index.js'
 
 test('isValidVoiceId：清单内与命名规则', () => {
   assert.equal(isValidVoiceId('zh-CN-XiaoxiaoNeural'), true)
@@ -57,6 +57,34 @@ test('resolveConfig：引擎预设与密钥回退', () => {
   assert.equal(cfg.ttsVoice, 'zh-CN-XiaoxiaoNeural')
   const custom = resolveConfig({ asrEngine: 'custom', asrBaseUrl: 'https://asr.example.com/v1/' })
   assert.equal(custom.asrBaseUrl, 'https://asr.example.com/v1')
+})
+
+test('Config Schema 兼容宿主设置面板：凭据脱敏、volatile 热更新与 toJSON 序列化', async () => {
+  delete process.env.DSH_VOICE_ASR_KEY
+  assert.equal(Config[Symbol.for('schemastery')], true)
+  assert.equal(Config.dict.asrApiKey.meta.role, 'secret')
+  assert.equal(Config.dict.proxyUrl.meta.role, 'secret')
+  assert.equal(Config.dict.ttsVoice.meta.volatile, true)
+  assert.equal(Config.dict.asrApiKey.meta.volatile, true)
+
+  const serialized = JSON.parse(JSON.stringify(Config))
+  assert.equal(typeof serialized.uid, 'number')
+  assert.ok(serialized.refs && typeof serialized.refs === 'object')
+
+  const parsed = Config({})
+  const registered = []
+  apply({ tools: { register(def) { registered.push(def); return () => {} } }, logger: { warn() {} } }, parsed)
+  const health = registered.find((d) => d.name === 'voice_health')
+  assert.equal((await health.execute({})).ok, false)
+
+  const updated = Config({ asrApiKey: 'gsk_live', ttsVoice: 'zh-CN-YunxiNeural' })
+  const writeSym = Symbol.for('cosmokit.volatile.write')
+  parsed.asrApiKey[writeSym](updated.asrApiKey.get())
+  parsed.ttsVoice[writeSym](updated.ttsVoice.get())
+  assert.equal(liveConfig(parsed).ttsVoice, 'zh-CN-YunxiNeural')
+  const checkAfter = await health.execute({})
+  assert.equal(checkAfter.ok, true)
+  assert.equal(checkAfter.checks[0].detail, 'zh-CN-YunxiNeural')
 })
 
 test('cleanup', () => { rmSync(dir, { recursive: true, force: true }) })

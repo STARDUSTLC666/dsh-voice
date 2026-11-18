@@ -190,12 +190,24 @@ export interface VoiceToolDeps {
 }
 
 /**
- * 构建三个工具定义。
+ * 构建五个语音工具定义（支持静态配置对象或活引用配置 getter）。
  */
-export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps = {}): VoiceToolDefinition[] {
-  const cfg = config
-  const fetchImpl = cfg.proxyUrl !== '' ? createProxyFetch(cfg.proxyUrl) : undefined
-  const timeout = cfg.timeoutMs
+export function buildVoiceTools(
+  config: ResolvedVoiceConfig | (() => ResolvedVoiceConfig),
+  deps: VoiceToolDeps = {},
+): VoiceToolDefinition[] {
+  const getCfg = typeof config === 'function' ? config : () => config
+  const initialCfg = getCfg()
+  let cachedProxyUrl = ''
+  let cachedFetchImpl: ReturnType<typeof createProxyFetch> | undefined
+  const getProxyFetch = (proxyUrl: string) => {
+    if (proxyUrl === '') return undefined
+    if (cachedFetchImpl === undefined || cachedProxyUrl !== proxyUrl) {
+      cachedProxyUrl = proxyUrl
+      cachedFetchImpl = createProxyFetch(proxyUrl)
+    }
+    return cachedFetchImpl
+  }
 
   const voiceList: VoiceToolDefinition = {
     name: 'voice_list',
@@ -238,13 +250,14 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       },
     },
     async execute(rawArgs: unknown, exec: unknown) {
+      const cfg = getCfg()
       const signal = execSignal(exec)
       throwIfAborted(signal)
       const args = asRecord(rawArgs)
       const text = requiredString(args, 'text', '要合成的文本')
       if (text.length > 5000) throw new Error('文本超过 5000 字符，请分段合成。')
       const voice = optionalString(args, 'voice') ?? cfg.ttsVoice
-      if (!isValidVoiceId(voice)) throw new Error('音色 id 不合法：' + voice + '。请用 voice_list 查看常用音色，或使用 zh-CN-XXXNeural 形式的 edge 音色。')
+      if (!isValidVoiceId(voice)) throw new Error('音色 id 不合法：' + voice + '。请用 voice_list 查看常用音色，或在 DSH「设置 → 插件 → 语音」修改 ttsVoice（合法格式如 zh-CN-XiaoxiaoNeural）。')
       const rate = optionalString(args, 'rate') ?? cfg.ttsRate
       const pitch = optionalString(args, 'pitch') ?? cfg.ttsPitch
       for (const [value, label] of [[rate, '语速 rate'], [pitch, '音调 pitch']] as const) {
@@ -252,12 +265,12 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       }
       const requested = optionalString(args, 'output'), cwd = sessionCwd(exec)
       resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd)
-      const audio = await raceAbort((deps.tts ?? synthesizeSpeech)({ text, voice, rate, pitch }, { proxyUrl: cfg.proxyUrl }, timeout, signal), signal)
+      const audio = await raceAbort((deps.tts ?? synthesizeSpeech)({ text, voice, rate, pitch }, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal), signal)
       throwIfAborted(signal)
       const output = writeWorkspaceFile(resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd), audio, cwd, undefined, cfg.overwrite)
       return { output, bytes: audio.length, voice, rate, pitch, textLength: text.length }
     },
-    timeoutMs: timeout + 10000,
+    timeoutMs: initialCfg.timeoutMs + 10000,
   }
 
   const voiceStt: VoiceToolDefinition = {
@@ -283,6 +296,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       },
     },
     async execute(rawArgs: unknown, exec: unknown) {
+      const cfg = getCfg()
       const signal = execSignal(exec)
       throwIfAborted(signal)
       const args = asRecord(rawArgs)
@@ -293,11 +307,11 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
         throw new Error('engine 必须是 groq / openai / custom 之一（当前：' + requestedEngine + '）。')
       }
       if (requestedEngine !== undefined && requestedEngine !== cfg.asrEngine) {
-        throw new Error('voice_stt 不支持用 engine 参数临时换引擎（配置 asrEngine=' + cfg.asrEngine + '，本次传入 ' + requestedEngine + '）。接口地址与密钥是一组配置，混着用会把密钥发到非预期的服务；如需切换请改配置里的 asrEngine / asrBaseUrl。')
+        throw new Error('voice_stt 不支持用 engine 参数临时换引擎（配置 asrEngine=' + cfg.asrEngine + '，本次传入 ' + requestedEngine + '）。接口地址与密钥是一组配置，混着用会把密钥发到非预期的服务；如需切换请在 DSH「设置 → 插件 → 语音」修改 asrEngine / asrBaseUrl（保存即生效）。')
       }
       // 接口地址一律取配置：openai/groq 预设已由 resolveConfig 回填，自定义端点原样使用。
       const baseUrl = cfg.asrBaseUrl
-      if (baseUrl === '') throw new Error('未配置 ASR 接口地址：asrEngine=custom 时必须在配置里提供 asrBaseUrl。')
+      if (baseUrl === '') throw new Error('未配置 ASR 接口地址：asrEngine=custom 时必须在 DSH「设置 → 插件 → 语音」或配置里提供 asrBaseUrl（保存即生效）。')
       assertAudioSize(statSync(audioPath).size)
       const audio = readFileSync(audioPath)
       // 伪文件（如 procfs）stat 报 0 字节，按实际读到的长度再判一次。
@@ -309,7 +323,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
         model,
         language: optionalString(args, 'language'),
         prompt: optionalString(args, 'prompt'),
-      }, fetchImpl ?? globalThis.fetch, timeout, signal), signal)
+      }, getProxyFetch(cfg.proxyUrl) ?? globalThis.fetch, cfg.timeoutMs, signal), signal)
       throwIfAborted(signal)
       let transcriptFile = ''
       const output = optionalString(args, 'output')
@@ -322,7 +336,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       // dsh rejects the whole tool result (issue #1).
       return { text, model, language: optionalString(args, 'language') ?? '', audio: audioPath, transcriptFile }
     },
-    timeoutMs: timeout + 10000,
+    timeoutMs: initialCfg.timeoutMs + 10000,
   }
 
   const voicePreview: VoiceToolDefinition = {
@@ -352,6 +366,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       },
     },
     async execute(rawArgs: unknown, exec: unknown) {
+      const cfg = getCfg()
       const signal = execSignal(exec)
       throwIfAborted(signal)
       const args = asRecord(rawArgs)
@@ -370,7 +385,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
           return { voice, error: '音色 id 不合法（应为 zh-CN-XXXNeural 形式的 edge 音色）' }
         }
         try {
-          const audio = await raceAbort((deps.tts ?? synthesizeSpeech)({ text, voice, rate: cfg.ttsRate, pitch: cfg.ttsPitch }, { proxyUrl: cfg.proxyUrl }, timeout, signal), signal)
+          const audio = await raceAbort((deps.tts ?? synthesizeSpeech)({ text, voice, rate: cfg.ttsRate, pitch: cfg.ttsPitch }, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal), signal)
           throwIfAborted(signal)
           const name = 'voice-preview-' + voice.replace(/[^a-zA-Z0-9-]/g, '_') + '.mp3'
           // 复用 resolveOutputPath：overwrite=false 时改名加序号，不再直接覆盖同名样例。
@@ -390,7 +405,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       }
       return { count: samples.length, samples, failed, text }
     },
-    timeoutMs: timeout + 10000,
+    timeoutMs: initialCfg.timeoutMs + 10000,
   }
 
   const voiceHealth: VoiceToolDefinition = {
@@ -418,6 +433,7 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
       },
     },
     async execute() {
+      const cfg = getCfg()
       const checks: Array<Record<string, unknown>> = []
       const hints: string[] = []
       let ok = true
@@ -426,11 +442,11 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
         name: 'TTS 音色',
         ok: voiceOk,
         detail: voiceOk ? cfg.ttsVoice : '不合法：' + cfg.ttsVoice + '（用 voice_list 查看）',
-        ...(voiceOk ? {} : { hint: '运行 voice_list 挑一个清单内音色，填回 ttsVoice；合法 id 形如 zh-CN-XiaoxiaoNeural。' }),
+        ...(voiceOk ? {} : { hint: '运行 voice_list 挑一个清单内音色，在 DSH「设置 → 插件 → 语音」修改 ttsVoice（保存即生效）；合法 id 形如 zh-CN-XiaoxiaoNeural。' }),
       })
       if (!voiceOk) {
         ok = false
-        hints.push('TTS 音色不合法：先 voice_list 选音色，再改配置 ttsVoice 并重启 DSH；在此之前 voice_tts 调用会直接报错。')
+        hints.push('TTS 音色不合法：先用 voice_list 选音色，再在 DSH「设置 → 插件 → 语音」修改 ttsVoice（保存即生效）；在此之前 voice_tts 调用会直接报错。')
       }
       checks.push({ name: '特殊代理', ok: true, detail: cfg.proxyUrl !== '' ? '已配置 ' + cfg.proxyUrl : '未配置' })
       checks.push({ name: 'ASR 引擎', ok: true, detail: cfg.asrEngine })
@@ -439,22 +455,22 @@ export function buildVoiceTools(config: ResolvedVoiceConfig, deps: VoiceToolDeps
         name: 'ASR 接口地址',
         ok: baseUrlOk,
         detail: baseUrlOk ? cfg.asrBaseUrl : '未配置：asrEngine=custom 时必须提供 asrBaseUrl。',
-        ...(baseUrlOk ? {} : { hint: 'asrEngine=custom 时补上 asrBaseUrl（含 /v1 的 OpenAI 兼容地址），或改回 groq / openai 预设。' }),
+        ...(baseUrlOk ? {} : { hint: '在 DSH「设置 → 插件 → 语音」补上 asrBaseUrl（含 /v1 的 OpenAI 兼容地址，保存即生效），或改回 groq / openai 预设。' }),
       })
       if (!baseUrlOk) {
         ok = false
-        hints.push('ASR 接口地址缺失：只有 voice_stt 受影响，voice_tts / voice_list / voice_preview 仍可用。')
+        hints.push('ASR 接口地址缺失：只有 voice_stt 受影响，voice_tts / voice_list / voice_preview 仍可零配置正常使用。')
       }
       const hasKey = cfg.asrApiKey !== '' || typeof process.env.DSH_VOICE_ASR_KEY === 'string' && process.env.DSH_VOICE_ASR_KEY !== ''
       checks.push({
         name: 'ASR 密钥',
         ok: hasKey,
-        detail: hasKey ? '已配置' : '未配置：voice_stt 需要 DSH_VOICE_ASR_KEY 环境变量或配置 asrApiKey',
-        ...(hasKey ? {} : { hint: '设置环境变量 DSH_VOICE_ASR_KEY（推荐，不落配置文件）或配置 asrApiKey，然后重启 DSH；密钥缺失只影响 voice_stt。' }),
+        detail: hasKey ? '已配置' : '未配置：voice_stt 需要 DSH_VOICE_ASR_KEY 环境变量或在「设置 → 插件 → 语音」配置 asrApiKey',
+        ...(hasKey ? {} : { hint: '在 DSH「设置 → 插件 → 语音」填写 asrApiKey（自动脱敏、保存即生效），或设置环境变量 DSH_VOICE_ASR_KEY；密钥缺失只影响 voice_stt。' }),
       })
       if (!hasKey) {
         ok = false
-        hints.push('缺 ASR 密钥：voice_stt 无法转写；TTS 三个工具不需要密钥，可以先正常用。')
+        hints.push('缺 ASR 密钥：仅 voice_stt 录音转写需要密钥；文字转语音（voice_tts / voice_list / voice_preview）无需任何密钥，现在即可直接使用。')
       }
       return { ok, plugin: 'dsh-voice', checks, ...(hints.length > 0 ? { hints } : {}) }
     },
