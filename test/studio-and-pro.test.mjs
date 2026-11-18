@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  apply,
   applyPronunciationsPlain,
   buildSsml,
   buildVoiceTools,
@@ -13,6 +14,7 @@ import {
   createSilenceMp3,
   createVoiceStudioBackend,
   inspectMp3Buffer,
+  installVoiceStudioWeb,
   liveConfig,
   parseSubtitleFile,
   resetUploadedVoiceCacheForTest,
@@ -462,4 +464,86 @@ test('Pro 6: lib/client.js 已构建、通过 node --check、注册 dsh-voice.wo
     'lib/client.js must bundle 5 themes',
   )
   assert.ok(code.includes('dsh-updates') || code.includes('__stardustUpdatesGuard'), 'lib/client.js must include @stardustlc/dsh-updates footer integration')
+})
+
+test('Pro 7: apply 动态注册 voice-workflow 运行时技能且 dispose 卸载干净', () => {
+  const registeredSkills = []
+  const listeners = {}
+  const ctx = {
+    tools: { register: () => () => {} },
+    on(event, fn) {
+      ;(listeners[event] ??= []).push(fn)
+      return () => {}
+    },
+    inject(services, cb) {
+      if (Array.isArray(services) && services.includes('skills')) {
+        cb({
+          skills: {
+            register(def) {
+              registeredSkills.push(def)
+              return () => {
+                const idx = registeredSkills.indexOf(def)
+                if (idx >= 0) registeredSkills.splice(idx, 1)
+              }
+            },
+          },
+        })
+      }
+    },
+  }
+
+  apply(ctx, {})
+  assert.equal(registeredSkills.length, 1)
+  assert.equal(registeredSkills[0].name, 'voice-workflow')
+  assert.equal(registeredSkills[0].source, 'runtime')
+  assert.equal(registeredSkills[0].resourceBase.kind, 'directory')
+  assert.ok(registeredSkills[0].description.includes('Voice Studio'))
+  assert.ok(registeredSkills[0].content.includes('voice_tts'))
+
+  for (const fn of listeners.dispose ?? []) fn()
+  assert.equal(registeredSkills.length, 0)
+})
+
+test('Pro 7: installVoiceStudioWeb 默认按 voice 条目写设置并遵守 settings.writable', async () => {
+  const calls = []
+  let hostWritable = true
+  const backend = installVoiceStudioWeb(
+    {
+      inject(services, cb) {
+        if (Array.isArray(services) && services.includes('settings')) {
+          cb({
+            settings: {
+              get writable() {
+                return hostWritable
+              },
+              async update(id, patch) {
+                calls.push({ id, patch })
+              },
+            },
+          })
+        }
+      },
+    },
+    () => resolveConfig({}),
+  )
+
+  assert.equal(backend.snapshot().writable, true)
+  const makePost = (body) =>
+    new Request('http://127.0.0.1:49000' + VOICE_STUDIO_API_ROUTE, {
+      method: 'POST',
+      headers: { 'X-DSH-VOICE': '1', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  const okRes = await backend.fetch(makePost({ action: 'updateConfig', patch: { ttsVoice: 'zh-CN-YunxiNeural' } }))
+  assert.equal(okRes.status, 200)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].id, 'voice')
+  assert.deepEqual(calls[0].patch, { ttsVoice: 'zh-CN-YunxiNeural' })
+
+  hostWritable = false
+  assert.equal(backend.snapshot().writable, false)
+  const roRes = await backend.fetch(makePost({ action: 'updateConfig', patch: { ttsVoice: 'zh-CN-XiaoxiaoNeural' } }))
+  assert.equal(roRes.status, 403)
+  assert.equal(calls.length, 1)
 })

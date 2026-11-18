@@ -9,6 +9,9 @@ import { registerUpdates } from '@stardustlc/dsh-updates'
  * @module dsh-voice
  */
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { resolveConfig, type VoiceConfig } from './config.js'
 import { Config as VoiceConfigSchema, liveConfig } from './host-config.js'
 import { buildVoiceTools, type VoiceToolDefinition } from './tools.js'
@@ -18,6 +21,78 @@ import { installVoiceStudioWeb } from './web.js'
 export const Config = VoiceConfigSchema
 export const name = 'voice'
 export const inject = ['tools']
+
+/** 随包分发的技能目录绝对路径。 */
+export function bundledSkillsDir(): string {
+  return fileURLToPath(new URL('../skills/', import.meta.url))
+}
+
+function unquoteYamlScalar(value: string): string {
+  const trimmed = value.trim()
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\n/g, '\n').trim()
+  }
+  return trimmed
+}
+
+/** 解析 SKILL.md 的 YAML frontmatter（零外部依赖）。 */
+export function parseSkillFile(text: string): { name: string; description: string; content: string } {
+  const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
+  const match = /^---[ \t]*\n([\s\S]*?)\n---[ \t]*\n?/.exec(normalized)
+  if (!match) return { name: '', description: '', content: normalized }
+  let skillName = ''
+  let description = ''
+  for (const rawLine of match[1].split('\n')) {
+    const keyMatch = /^([A-Za-z][A-Za-z0-9_-]*):[ \t]*(.*)$/.exec(rawLine.trim())
+    if (!keyMatch) continue
+    if (keyMatch[1] === 'name') skillName = unquoteYamlScalar(keyMatch[2])
+    else if (keyMatch[1] === 'description') description = unquoteYamlScalar(keyMatch[2])
+  }
+  return { name: skillName, description, content: normalized.slice(match[0].length).trimStart() }
+}
+
+function installVoiceWorkflowSkill(
+  ctx: VoicePluginContext,
+  warn: (message: string) => void,
+  disposers: Array<() => void>,
+): void {
+  if (typeof ctx.inject !== 'function') return
+  try {
+    ctx.inject(['skills'], (skillCtx: any) => {
+      if (typeof skillCtx?.skills?.register !== 'function') return
+      try {
+        const dir = join(bundledSkillsDir(), 'voice-workflow')
+        const parsed = parseSkillFile(readFileSync(join(dir, 'SKILL.md'), 'utf8'))
+        if (!parsed.name || !parsed.description || !parsed.content) {
+          throw new Error('voice-workflow 的 frontmatter 不完整')
+        }
+        const off = skillCtx.skills.register({
+          name: parsed.name,
+          description: parsed.description,
+          content: parsed.content,
+          resourceBase: { kind: 'directory', path: dir },
+          source: 'runtime',
+        })
+        if (typeof off === 'function') {
+          let cleaned = false
+          const cleanup = () => {
+            if (cleaned) return
+            cleaned = true
+            off()
+          }
+          disposers.push(cleanup)
+          if (typeof skillCtx.effect === 'function') {
+            skillCtx.effect(() => cleanup, 'dsh-voice: voice-workflow skill')
+          }
+        }
+      } catch (error) {
+        warn('[dsh-voice] 技能加载失败：' + (error instanceof Error ? error.message : String(error)))
+      }
+    })
+  } catch (error) {
+    warn('[dsh-voice] 技能注入未启用：' + (error instanceof Error ? error.message : String(error)))
+  }
+}
 
 /** 插件所需的最小 ctx 面。 */
 export interface VoicePluginContext {
@@ -29,7 +104,7 @@ export interface VoicePluginContext {
 }
 
 /**
- * 插件入口：解析配置、注册五个语音工具并挂载 Voice Studio Web 路由。
+ * 插件入口：解析配置、注册五个语音工具、按需注入运行时工作流技能并挂载 Voice Studio Web 路由。
  */
 export function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): void {
   registerUpdates(ctx, { name: "dsh-voice" })
@@ -55,6 +130,7 @@ export function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): voi
   for (const definition of buildVoiceTools(readCfg)) {
     disposers.push(ctx.tools.register(definition))
   }
+  installVoiceWorkflowSkill(ctx, warn, disposers)
   installVoiceStudioWeb(ctx as any, readCfg)
   const teardown = () => {
     for (const dispose of disposers) dispose()

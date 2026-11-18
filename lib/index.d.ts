@@ -1,18 +1,17 @@
-/**
- * dsh-voice —— 语音双件套工具插件（node 半身，配置走 cordis.patch.yml）。
- *
- * 插件导出 apply(ctx, config)：注册五个面向模型的工具（voice_tts / voice_stt /
- * voice_list / voice_preview / voice_health）。TTS 走 edge-tts 协议（原生 WebSocket，
- * 零 API 成本）；STT 走 OpenAI 兼容 ASR 接口（Groq/OpenAI/自定义端点）。
- *
- * @module dsh-voice
- */
 import { type VoiceConfig } from './config.js';
 import { type VoiceToolDefinition } from './tools.js';
 /** cordis 服务注入：apply 里要用 ctx.tools，必须显式声明。 */
 export declare const Config: import("./host-config.js").HostSchemaNode<VoiceConfig>;
 export declare const name = "voice";
 export declare const inject: string[];
+/** 随包分发的技能目录绝对路径。 */
+export declare function bundledSkillsDir(): string;
+/** 解析 SKILL.md 的 YAML frontmatter（零外部依赖）。 */
+export declare function parseSkillFile(text: string): {
+    name: string;
+    description: string;
+    content: string;
+};
 /** 插件所需的最小 ctx 面。 */
 export interface VoicePluginContext {
     logger?: {
@@ -26,7 +25,7 @@ export interface VoicePluginContext {
     on?(event: string, listener: () => void): () => void;
 }
 /**
- * 插件入口：解析配置、注册五个语音工具并挂载 Voice Studio Web 路由。
+ * 插件入口：解析配置、注册五个语音工具、按需注入运行时工作流技能并挂载 Voice Studio Web 路由。
  */
 export declare function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): void;
 export * from './config.js';

@@ -1,5 +1,10 @@
 # 更新记录
 
+## 0.9.1 (2026-11-18)
+
+- 运行时技能自动挂载与设置回退 ID 对齐：`apply` 通过 `ctx.inject(['skills'])` 将随包 `voice-workflow` 技能自动注册进宿主运行时技能表（支持 `effect`/`dispose` 热卸载）；Voice Studio 面板在缺少 `fiber` 元信息时的设置更新目标 ID 对齐 `cordis.patch.yml` 的 `'voice'`，并严格遵守宿主 `settings.writable` 只读状态。
+- Runtime skill registration & settings entry ID alignment: automatically register the bundled `voice-workflow` skill into the host runtime `skills` service via `ctx.inject(['skills'])` with full `effect`/`dispose` cleanup, align the Voice Studio fallback settings entry ID with `'voice'` in `cordis.patch.yml`, and honor host `settings.writable` read-only state.
+
 ## 0.9.0 (2026-11-18)
 
 - 新增原生 5 主题 Voice Studio 侧边栏工作台（原生清透 / 米白纸感 / Claude 暖书卷 / 8-Bit 像素 / 晴空薄荷）与 Coachmark 新手引导：支持在线试听 300+ 音色与 10 套人设、0.8x–1.5x 倍速播放、浏览器麦克风速记转写、自定义角色与发音词典管理，并集成 `@stardustlc/dsh-updates` 底部更新控件。

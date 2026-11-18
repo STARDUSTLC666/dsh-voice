@@ -695,11 +695,14 @@ export function installVoiceStudioWeb(
   deps: VoiceStudioBackendOptions = {},
 ): ReturnType<typeof createVoiceStudioBackend> {
   let updateSettings = deps.updateSettings
+  let isHostWritable: (() => boolean) | undefined
   const backend = createVoiceStudioBackend(readCfg, {
     ...deps,
-    writable: deps.writable ?? (() => typeof updateSettings === 'function'),
+    writable:
+      deps.writable ??
+      (() => typeof updateSettings === 'function' && (isHostWritable ? isHostWritable() : true)),
     updateSettings: (patch) => {
-      if (typeof updateSettings !== 'function') {
+      if (typeof updateSettings !== 'function' || (isHostWritable && !isHostWritable())) {
         return Promise.reject(new VoiceStudioError('当前配置是只读的，无法保存设置。', 403, 'readonly'))
       }
       return updateSettings(patch)
@@ -711,9 +714,22 @@ export function installVoiceStudioWeb(
   if (!deps.updateSettings) {
     try {
       ctx.inject(['settings'], (host: any) => {
-        const pluginId = ctx.fiber?.entry?.options?.id || 'dsh-voice'
+        const rawId = ctx.fiber?.entry?.options?.id
+        const pluginId = typeof rawId === 'string' && rawId.trim() !== '' ? rawId.trim() : 'voice'
         if (typeof host?.settings?.update === 'function') {
-          updateSettings = (patch: Record<string, unknown>) => host.settings.update(pluginId, patch)
+          const setFn = (patch: Record<string, unknown>) => host.settings.update(pluginId, patch)
+          const checkWritable = () => host.settings?.writable !== false
+          updateSettings = setFn
+          isHostWritable = checkWritable
+          if (typeof host.effect === 'function') {
+            host.effect(
+              () => () => {
+                if (updateSettings === setFn) updateSettings = undefined
+                if (isHostWritable === checkWritable) isHostWritable = undefined
+              },
+              'dsh-voice: settings binding',
+            )
+          }
         }
       })
     } catch {
