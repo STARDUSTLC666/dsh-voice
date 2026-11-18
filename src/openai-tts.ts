@@ -3,11 +3,164 @@
  *
  * @module dsh-voice/openai-tts
  */
+import { createHash } from 'node:crypto'
+import { extname } from 'node:path'
 
 /** 零样本克隆参考音频样本。 */
 export interface ReferenceVoiceSample {
   audioDataUri: string
   text?: string
+  rawAudio?: Buffer
+  filename?: string
+}
+
+/** 传给 TTS / 上传接口的 fetch：支持像代理那样附带自己的 FormData 构造器。 */
+export type OpenAiTtsFetch = typeof fetch & { FormData?: typeof FormData }
+
+const uploadedVoiceUriCache = new Map<string, string>()
+const inFlightVoiceUploads = new Map<string, Promise<string>>()
+
+/** 重置 SiliconFlow 参考音频 URI 内存缓存（测试专用）。 */
+export function resetUploadedVoiceCacheForTest(): void {
+  uploadedVoiceUriCache.clear()
+  inFlightVoiceUploads.clear()
+}
+
+function mimeOfAudio(filename: string): string {
+  const ext = extname(filename).toLowerCase()
+  const table: Record<string, string> = {
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.m4a': 'audio/mp4',
+    '.mp4': 'audio/mp4',
+    '.ogg': 'audio/ogg',
+    '.opus': 'audio/ogg',
+    '.flac': 'audio/flac',
+    '.webm': 'audio/webm',
+  }
+  return table[ext] ?? 'application/octet-stream'
+}
+
+/**
+ * 上传参考音频到 SiliconFlow `/uploads/audio/voice` 并返回可复用的 `speech:...` URI；
+ * 相同 `baseUrl + model + text + audio SHA-256` 命中内存缓存直接返回，避免分段重复上传。
+ */
+export async function uploadSiliconFlowVoice(
+  baseUrl: string,
+  apiKey: string,
+  sample: { audio: Buffer; filename: string; model: string; text: string },
+  fetchImpl: OpenAiTtsFetch = globalThis.fetch,
+  timeoutMs = 30000,
+  signal?: AbortSignal,
+): Promise<string> {
+  throwIfAborted(signal)
+  const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, '')
+  if (trimmedBaseUrl === '') {
+    throw new Error('未配置 TTS 接口地址，无法上传参考音频。')
+  }
+  const key = apiKey.trim()
+  if (key === '' && !isLoopbackUrl(trimmedBaseUrl)) {
+    throw new Error('未配置 TTS 密钥，无法上传参考音频。')
+  }
+  if (!Buffer.isBuffer(sample.audio) || sample.audio.length === 0) {
+    throw new Error('参考音频为空，无法上传。')
+  }
+  if (typeof sample.text !== 'string' || sample.text.trim() === '') {
+    throw new Error('参考音频文本为空，无法上传 SiliconFlow 音色。')
+  }
+
+  const audioHash = createHash('sha256').update(sample.audio).digest('hex')
+  const cacheKey = createHash('sha256')
+    .update(trimmedBaseUrl + '|' + sample.model + '|' + sample.text + '|' + audioHash)
+    .digest('hex')
+
+  const cached = uploadedVoiceUriCache.get(cacheKey)
+  if (cached !== undefined) {
+    return cached
+  }
+
+  const existing = inFlightVoiceUploads.get(cacheKey)
+  if (existing !== undefined) {
+    return await raceAbort(existing, signal)
+  }
+
+  const uploadPromise = (async (): Promise<string> => {
+    const FormDataImpl = (fetchImpl as { FormData?: typeof FormData }).FormData ?? FormData
+    const form = new FormDataImpl()
+    const filename = sample.filename.trim() !== '' ? sample.filename.trim() : 'reference.mp3'
+    const mime = mimeOfAudio(filename)
+    form.append('model', sample.model)
+    form.append('customName', 'dsh_' + cacheKey.slice(0, 10))
+    form.append('text', sample.text)
+    form.append('file', new Blob([sample.audio], { type: mime }), filename)
+
+    const headers: Record<string, string> = key !== '' ? { authorization: 'Bearer ' + key } : {}
+    const timeoutSignal = AbortSignal.timeout(timeoutMs)
+    const requestSignal = signal === undefined ? timeoutSignal : AbortSignal.any([timeoutSignal, signal])
+
+    let response: Response
+    try {
+      response = await raceAbort(
+        fetchImpl(trimmedBaseUrl + '/uploads/audio/voice', {
+          method: 'POST',
+          redirect: 'manual',
+          headers,
+          body: form,
+          signal: requestSignal,
+        }),
+        requestSignal,
+      )
+    } catch (error) {
+      throwIfAborted(signal)
+      if (timeoutSignal.aborted) throw new Error('SiliconFlow 参考音频上传超时。')
+      throw new Error('SiliconFlow 参考音频上传失败：' + (error instanceof Error ? error.message : String(error)))
+    }
+
+    if (response.status >= 300 && response.status < 400) {
+      try { await raceAbort(response.body?.cancel(), requestSignal) } catch { /* 忽略 */ }
+      throwIfAborted(signal)
+      throw new Error('SiliconFlow 音色上传返回重定向（HTTP ' + response.status + '），已阻止跳转。')
+    }
+
+    if (!response.ok) {
+      let body = ''
+      try {
+        body = (await raceAbort(response.text(), requestSignal)).slice(0, 300)
+      } catch (error) {
+        throwIfAborted(signal)
+        if (timeoutSignal.aborted) throw new Error('SiliconFlow 音色上传响应读取超时。')
+        throw error
+      }
+      throw new Error('SiliconFlow 音色上传失败：HTTP ' + response.status + '。' + body)
+    }
+
+    let json: unknown
+    try {
+      json = await raceAbort(response.json(), requestSignal)
+    } catch (error) {
+      throwIfAborted(signal)
+      if (timeoutSignal.aborted) throw new Error('SiliconFlow 音色上传响应读取超时。')
+      throw new Error('SiliconFlow 音色上传响应不是合法 JSON：' + (error instanceof Error ? error.message : String(error)))
+    }
+
+    const uri = typeof json === 'object' && json !== null && typeof (json as Record<string, unknown>).uri === 'string'
+      ? ((json as Record<string, unknown>).uri as string).trim()
+      : ''
+    if (uri === '') {
+      throw new Error('SiliconFlow 音色上传响应缺少 uri 字段。')
+    }
+
+    uploadedVoiceUriCache.set(cacheKey, uri)
+    return uri
+  })()
+
+  uploadPromise.catch(() => {})
+  inFlightVoiceUploads.set(cacheKey, uploadPromise)
+  try {
+    return await raceAbort(uploadPromise, signal)
+  } finally {
+    inFlightVoiceUploads.delete(cacheKey)
+  }
 }
 
 /** OpenAI 兼容 TTS 合成选项。 */
@@ -68,7 +221,7 @@ export async function synthesizeOpenAiSpeech(
   baseUrl: string,
   apiKey: string,
   options: OpenAiTtsOptions,
-  fetchImpl: typeof fetch = globalThis.fetch,
+  fetchImpl: OpenAiTtsFetch = globalThis.fetch,
   timeoutMs = 60000,
   signal?: AbortSignal,
 ): Promise<Buffer> {
@@ -107,14 +260,52 @@ export async function synthesizeOpenAiSpeech(
     input = instr + '<|endofprompt|>' + options.text
   }
 
+  let effectiveVoice = options.voice
+  let sendInlineReferences = hasReferences
+  if (
+    options.voice === ''
+    && hasReferences
+    && options.references!.length === 1
+    && Buffer.isBuffer(options.references![0].rawAudio)
+    && options.references![0].rawAudio.length > 0
+    && typeof options.references![0].text === 'string'
+    && options.references![0].text.trim() !== ''
+    && trimmedBaseUrl.toLowerCase().includes('siliconflow.')
+    && key !== ''
+  ) {
+    const ref = options.references![0]
+    try {
+      const uri = await uploadSiliconFlowVoice(
+        trimmedBaseUrl,
+        key,
+        {
+          audio: ref.rawAudio!,
+          filename: ref.filename && ref.filename.trim() !== '' ? ref.filename.trim() : 'reference.mp3',
+          model: effectiveModel,
+          text: ref.text!.trim(),
+        },
+        fetchImpl,
+        timeoutMs,
+        abortSignal,
+      )
+      if (uri.trim() !== '') {
+        effectiveVoice = uri.trim()
+        sendInlineReferences = false
+      }
+    } catch {
+      throwIfAborted(abortSignal)
+      // 若上传端点不可用（如仅 mock /audio/speech 的单测），静默回退为内联 references
+    }
+  }
+
   const payload: Record<string, unknown> = {
     model: effectiveModel,
     input,
-    voice: options.voice,
+    voice: effectiveVoice,
     response_format: 'mp3',
     ...(options.speed !== undefined && options.speed !== 1 ? { speed: options.speed } : {}),
     ...(instr !== '' && !isCosyVoice ? { instructions: instr } : {}),
-    ...(hasReferences
+    ...(sendInlineReferences
       ? {
           references: options.references!.map((ref) => ({
             audio: ref.audioDataUri,

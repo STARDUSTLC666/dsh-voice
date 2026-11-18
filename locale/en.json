@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Voice",
-    "description": "Keyless Edge (300+ online voices & all-age/dialect built-ins) & OpenAI/SiliconFlow TTS with 10 personas, emotion/acting instructions, zero-shot cloning & customVoices aliases, Markdown cleanup, multi-speaker podcasts with loudness mastering, SRT/VTT subtitles, browser previews, and multi-engine STT."
+    "description": "5-theme Voice Studio sidebar workbench (Native Airy / Warm Cream / Claude Warmth / Bright 8-Bit / Airy Mint with online 300+ voice & 10-persona auditioning, browser mic dictation, customVoices & pronunciation lexicon): keyless Edge & OpenAI/SiliconFlow TTS, exact MP3 duration feedback, reverse SRT/VTT video dubbing, podcast BGM auto-ducking & -16 LUFS mastering, SHA-256 cached voice cloning, pronunciation overrides, and speaker-diarized multi-engine STT."
   }
 }

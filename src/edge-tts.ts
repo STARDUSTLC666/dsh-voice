@@ -47,6 +47,7 @@ export interface TtsOptions {
   voice: string
   rate: string
   pitch: string
+  pronunciations?: ReadonlyArray<{ word: string; alias: string }>
 }
 
 /** 字幕时间轴条目（毫秒级）。 */
@@ -133,6 +134,46 @@ function escapeXmlAttr(value: string): string {
     .replace(/"/g, '&quot;')
 }
 
+function renderSsmlBody(text: string, pronunciations?: ReadonlyArray<{ word: string; alias: string }>): string {
+  const cleanText = stripIllegalXmlChars(text)
+  if (!Array.isArray(pronunciations) || pronunciations.length === 0) {
+    return escapeXml(cleanText)
+  }
+
+  const map = new Map<string, string>()
+  for (const rule of pronunciations) {
+    if (!rule || typeof rule.word !== 'string' || typeof rule.alias !== 'string') continue
+    const word = stripIllegalXmlChars(rule.word).trim()
+    const alias = stripIllegalXmlChars(rule.alias).trim()
+    if (word !== '' && alias !== '') {
+      map.set(word, alias)
+    }
+  }
+  if (map.size === 0) {
+    return escapeXml(cleanText)
+  }
+
+  const sortedWords = Array.from(map.keys()).sort((a, b) => b.length - a.length)
+  const regex = new RegExp(sortedWords.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g')
+
+  let out = ''
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(cleanText)) !== null) {
+    if (match.index > lastIndex) {
+      out += escapeXml(cleanText.slice(lastIndex, match.index))
+    }
+    const matchedWord = match[0]
+    const alias = map.get(matchedWord)!
+    out += `<sub alias='${escapeXmlAttr(alias)}'>${escapeXml(matchedWord)}</sub>`
+    lastIndex = match.index + matchedWord.length
+  }
+  if (lastIndex < cleanText.length) {
+    out += escapeXml(cleanText.slice(lastIndex))
+  }
+  return out
+}
+
 /** 生成 SSML。 */
 export function buildSsml(options: TtsOptions): string {
   const lang = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?(?:-[A-Z]{2})?/.exec(options.voice)?.[0] ?? 'zh-CN'
@@ -145,7 +186,7 @@ export function buildSsml(options: TtsOptions): string {
     + "' rate='"
     + escapeXmlAttr(options.rate)
     + "' volume='+0%'>"
-    + escapeXml(options.text)
+    + renderSsmlBody(options.text, options.pronunciations)
     + '</prosody></voice></speak>'
 }
 

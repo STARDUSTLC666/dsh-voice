@@ -8,7 +8,7 @@
  *
  * @module dsh-voice/host-config
  */
-import type { AsrEngine, CustomVoiceAlias, TtsEngine, VoiceConfig } from './config.js'
+import type { AsrEngine, CustomVoiceAlias, PronunciationRule, TtsEngine, VoiceConfig } from './config.js'
 
 const kSchema = Symbol.for('schemastery')
 const kValidationError = Symbol.for('ValidationError')
@@ -535,6 +535,11 @@ export const Config: HostSchemaNode<VoiceConfig> = z.object<VoiceConfig>({
     referenceText: z.string().description('参考音频对应的原始台词文本（可选，CosyVoice2 等克隆模型推荐填写）'),
   })).collapse().volatile()
     .description('自定义音色与零样本克隆别名列表（保存后立即生效）'),
+  pronunciations: z.array(z.object<PronunciationRule>({
+    word: z.string().required().description('原词或缩写（如 Nginx、SQL、重构）'),
+    alias: z.string().required().description('替读发音文本（如 Engine X、S Q L、虫构）'),
+  })).collapse().volatile()
+    .description('自定义发音词典（专有名词、缩写与多音字替读规则，保存后立即生效）'),
 }).i18n({
   zh: {
     $description: '零密钥 Edge / OpenAI 兼容语音合成（TTS）与语音转文字（ASR）设置（保存立即生效）',
@@ -553,6 +558,7 @@ export const Config: HostSchemaNode<VoiceConfig> = z.object<VoiceConfig>({
     timeoutMs: '请求超时毫秒数（5000–600000，默认 60000）',
     overwrite: '允许覆盖同名音频或转写文本（默认关闭，自动追加序号）',
     customVoices: '自定义音色与零样本克隆别名列表（可为常用音色、人设或参考音频命名，保存后立即生效）',
+    pronunciations: '自定义发音词典（专有名词、缩写与多音字替读规则，字幕保留原词，保存后立即生效）',
   },
   en: {
     $description: 'Keyless Edge / OpenAI-compatible TTS read-aloud and ASR transcription settings (live on save)',
@@ -571,6 +577,7 @@ export const Config: HostSchemaNode<VoiceConfig> = z.object<VoiceConfig>({
     timeoutMs: 'Per-request timeout in ms (5000–600000, default 60000)',
     overwrite: 'Overwrite existing output files instead of auto-numbering (default off)',
     customVoices: 'Custom voice and zero-shot cloning aliases (name reusable voices, personas, or reference audio clips; live on save)',
+    pronunciations: 'Custom pronunciation lexicon (override spoken aliases for acronyms/terms while keeping subtitles intact; live on save)',
   },
 })
 

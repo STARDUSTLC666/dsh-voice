@@ -7,6 +7,11 @@
 export type TtsEngine = 'edge' | 'openai' | 'siliconflow' | 'custom';
 /** ASR 引擎类型。 */
 export type AsrEngine = 'groq' | 'openai' | 'siliconflow' | 'custom';
+/** 发音替读规则（字幕保留原词，朗读按 alias 发音）。 */
+export interface PronunciationRule {
+    word: string;
+    alias: string;
+}
 /** 自定义音色与零样本克隆别名。 */
 export interface CustomVoiceAlias {
     name: string;
@@ -35,6 +40,7 @@ export interface VoiceConfig {
     timeoutMs?: number;
     overwrite?: boolean;
     customVoices?: CustomVoiceAlias[];
+    pronunciations?: PronunciationRule[];
 }
 /** 解析后的配置。 */
 export interface ResolvedVoiceConfig {
@@ -53,6 +59,7 @@ export interface ResolvedVoiceConfig {
     timeoutMs: number;
     overwrite: boolean;
     customVoices: CustomVoiceAlias[];
+    pronunciations: PronunciationRule[];
 }
 export declare const ASR_PRESETS: Record<'groq' | 'openai' | 'siliconflow', {
     baseUrl: string;

@@ -10,6 +10,12 @@ export type TtsEngine = 'edge' | 'openai' | 'siliconflow' | 'custom'
 /** ASR 引擎类型。 */
 export type AsrEngine = 'groq' | 'openai' | 'siliconflow' | 'custom'
 
+/** 发音替读规则（字幕保留原词，朗读按 alias 发音）。 */
+export interface PronunciationRule {
+  word: string
+  alias: string
+}
+
 /** 自定义音色与零样本克隆别名。 */
 export interface CustomVoiceAlias {
   name: string
@@ -39,6 +45,7 @@ export interface VoiceConfig {
   timeoutMs?: number
   overwrite?: boolean
   customVoices?: CustomVoiceAlias[]
+  pronunciations?: PronunciationRule[]
 }
 
 /** 解析后的配置。 */
@@ -58,6 +65,7 @@ export interface ResolvedVoiceConfig {
   timeoutMs: number
   overwrite: boolean
   customVoices: CustomVoiceAlias[]
+  pronunciations: PronunciationRule[]
 }
 
 export const ASR_PRESETS: Record<'groq' | 'openai' | 'siliconflow', { baseUrl: string; model: string }> = {
@@ -162,6 +170,23 @@ function parseCustomVoices(raw: unknown, onWarning: (message: string) => void): 
   return result
 }
 
+function parsePronunciations(raw: unknown, onWarning: (message: string) => void): PronunciationRule[] {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) {
+    onWarning('pronunciations 配置不合法（必须是数组），已忽略该项。')
+    return []
+  }
+  const result: PronunciationRule[] = []
+  for (const item of raw) {
+    if (!isPlainObject(item)) continue
+    const word = trimOptionalString(item.word)
+    const alias = trimOptionalString(item.alias)
+    if (word === undefined || alias === undefined) continue
+    result.push({ word, alias })
+  }
+  return result
+}
+
 /** 按别名（大小写不敏感）查找自定义音色配置。 */
 export function resolveCustomVoice(customVoices: readonly CustomVoiceAlias[], nameOrId: string): CustomVoiceAlias | undefined {
   const target = (typeof nameOrId === 'string' ? nameOrId : '').trim().toLowerCase()
@@ -219,6 +244,7 @@ export function resolveConfig(config: VoiceConfig | undefined | null, onWarning:
   }
   const overwrite = cfg.overwrite === true
   const customVoices = parseCustomVoices(cfg.customVoices, onWarning)
+  const pronunciations = parsePronunciations(cfg.pronunciations, onWarning)
   return {
     ttsEngine,
     ttsBaseUrl,
@@ -235,5 +261,6 @@ export function resolveConfig(config: VoiceConfig | undefined | null, onWarning:
     timeoutMs,
     overwrite,
     customVoices,
+    pronunciations,
   }
 }

@@ -4,6 +4,7 @@ export interface SttSegment {
     start: number;
     end: number;
     text: string;
+    speaker?: string;
 }
 /** 转写选项。 */
 export interface SttOptions {
@@ -13,6 +14,7 @@ export interface SttOptions {
     language?: string;
     prompt?: string;
     timestamps?: boolean;
+    diarize?: boolean;
     allowEmptyApiKey?: boolean;
     /** 取消信号（可选）；也可通过 transcribe 第 6 个参数传入。 */
     signal?: AbortSignal;
@@ -24,6 +26,7 @@ export interface SttResult {
     language?: string;
     duration?: number;
     segments?: SttSegment[];
+    speakers?: string[];
 }
 /** 预处理后的单个音频切片。 */
 export interface PreparedAudioChunk {
@@ -49,6 +52,8 @@ export type SttFetch = typeof fetch & {
 export declare function transcribe(baseUrl: string, apiKey: string, options: SttOptions, fetchImpl?: SttFetch, timeoutMs?: number, signal?: AbortSignal): Promise<SttResult>;
 /** 将 ASR 返回的 segments 格式化为 SRT 或 WebVTT 字幕文本。 */
 export declare function formatSttSubtitles(segments: SttSegment[], format: 'srt' | 'vtt'): string;
+/** 将带说话人标签的分段合并为按发言人分段的可读逐字稿（如 `[说话人 A 00:01] ...`）。 */
+export declare function formatDiarizedTranscript(segments: SttSegment[]): string;
 /** 检测环境 PATH 中是否可用 ffmpeg。 */
 export declare function hasFfmpeg(env?: NodeJS.ProcessEnv): boolean;
 /**
@@ -56,3 +61,17 @@ export declare function hasFfmpeg(env?: NodeJS.ProcessEnv): boolean;
  * 若转码后仍超过 24MB，则按每段 20 分钟（1200 秒）无损切分。
  */
 export declare function prepareAudioForAsr(audioPath: string, signal?: AbortSignal): Promise<OversizeAudioPreparation>;
+/** 双声道分离结果（含临时目录清理回调）。 */
+export interface StereoSplitResult {
+    channels: Array<{
+        audio: Blob | Buffer;
+        filename: string;
+        speaker: string;
+    }>;
+    cleanup: () => void;
+}
+/**
+ * 探测音频是否包含 >= 2 声道；若为立体声/多声道，拆分为左右声道（16kHz 32kbps 单声道 MP3）用于精准分轨说话人分离。
+ * 若非立体声或 ffmpeg 不可用/失败，返回 null。
+ */
+export declare function splitStereoChannelsForDiarization(audioPath: string, signal?: AbortSignal): Promise<StereoSplitResult | null>;

@@ -12,6 +12,7 @@ import { registerUpdates } from '@stardustlc/dsh-updates'
 import { resolveConfig, type VoiceConfig } from './config.js'
 import { Config as VoiceConfigSchema, liveConfig } from './host-config.js'
 import { buildVoiceTools, type VoiceToolDefinition } from './tools.js'
+import { installVoiceStudioWeb } from './web.js'
 
 /** cordis 服务注入：apply 里要用 ctx.tools，必须显式声明。 */
 export const Config = VoiceConfigSchema
@@ -22,12 +23,13 @@ export const inject = ['tools']
 export interface VoicePluginContext {
   logger?: { warn?(message: string, ...args: unknown[]): void }
   tools: { register(definition: VoiceToolDefinition): () => void }
+  inject?: Function
   effect?(effect: () => () => void, label?: string): unknown
   on?(event: string, listener: () => void): () => void
 }
 
 /**
- * 插件入口：解析配置并注册五个语音工具。
+ * 插件入口：解析配置、注册五个语音工具并挂载 Voice Studio Web 路由。
  */
 export function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): void {
   registerUpdates(ctx, { name: "dsh-voice" })
@@ -53,6 +55,7 @@ export function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): voi
   for (const definition of buildVoiceTools(readCfg)) {
     disposers.push(ctx.tools.register(definition))
   }
+  installVoiceStudioWeb(ctx as any, readCfg)
   const teardown = () => {
     for (const dispose of disposers) dispose()
   }
@@ -73,3 +76,4 @@ export * from './stt.js'
 export * from './tools.js'
 export * from './tts-text.js'
 export * from './voices.js'
+export * from './web.js'

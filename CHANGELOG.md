@@ -1,5 +1,18 @@
 # 更新记录
 
+## 0.9.0 (2026-11-18)
+
+- 新增原生 5 主题 Voice Studio 侧边栏工作台（原生清透 / 米白纸感 / Claude 暖书卷 / 8-Bit 像素 / 晴空薄荷）与 Coachmark 新手引导：支持在线试听 300+ 音色与 10 套人设、0.8x–1.5x 倍速播放、浏览器麦克风速记转写、自定义角色与发音词典管理，并集成 `@stardustlc/dsh-updates` 底部更新控件。
+- Add native 5-theme Voice Studio sidebar workbench (Native Airy / Warm Cream / Claude Warmth / Bright 8-Bit / Airy Mint) with interactive Coachmark onboarding: in-panel audition of 300+ voices & 10 personas with 0.8x–1.5x playback speed, browser `MediaRecorder` mic memo transcription, custom voice aliases & pronunciation lexicon management, and `@stardustlc/dsh-updates` footer controls.
+- 精准 MP3 帧与 Xing/VBRI VBR 时长解析（`inspectMp3Buffer`）与匹配采样率静音帧生成（`createSilenceMp3`）：`voice_tts` 返回精确数值 `durationMs` 与 `durationSec`，助力精准卡点配音。
+- Exact MP3 frame & Xing/VBRI VBR duration inspector (`inspectMp3Buffer`) and matched-sample-rate silence frames (`createSilenceMp3`): `voice_tts` now returns accurate numeric `durationMs` and `durationSec` for tight voiceover timing.
+- 发音词典（`pronunciations`）：Edge 引擎自动生成单趟 SSML `<sub alias>`（字幕保留 `Nginx` 原文，朗读按 `Engine X` 发音），OpenAI/SiliconFlow 引擎执行非递归纯文本替读，并支持宿主原生热更新配置。
+- Pronunciation lexicon (`pronunciations`): emits single-pass SSML `<sub alias>` on Edge (retaining original terms like `Nginx` in subtitles while speaking `Engine X`), performs non-recursive plain-text replacement on OpenAI/SiliconFlow, and supports volatile live-reloaded DSH settings.
+- 反向 `.srt` / `.vtt` 字幕时间轴卡点配音（`subtitleInput`）：按视频字幕时间窗自动计算 `scaleRatePercent` 加速重合成并精确填充前导与句间静音。
+- Reverse `.srt` / `.vtt` timeline-synced video dubbing (`subtitleInput`): automatically computes per-cue `scaleRatePercent` speedup re-synthesis when over-window and pads exact leading/inter-cue silence.
+- 播客 BGM 自动闪避混音（`bgmFile` / `bgmVolume` / `bgmDucking`）、说话人区分（`voice_stt` `diarize: true` + 双声道分离）与 SiliconFlow SHA-256 参考音频 URI 缓存上传（`/uploads/audio/voice` 分段仅上传一次）。
+- Podcast BGM auto-ducking (`bgmFile` / `bgmVolume` / `bgmDucking` via FFmpeg `sidechaincompress`), speaker diarization (`voice_stt` `diarize: true` with stereo channel splitting), and SiliconFlow SHA-256 reference voice URI upload caching (`/uploads/audio/voice` uploaded once per reference clip).
+
 ## 0.8.1 (2026-11-18)
 
 - 升级共享更新组件至 `@stardustlc/dsh-updates@0.2.4`：对话页新增一键热更新提醒卡片，自动检查周期缩短至 6 小时，手动热更新后可顺手开启包含兼容功能小版本的空闲自动更新。

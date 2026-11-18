@@ -21,11 +21,12 @@ export interface VoicePluginContext {
     tools: {
         register(definition: VoiceToolDefinition): () => void;
     };
+    inject?: Function;
     effect?(effect: () => () => void, label?: string): unknown;
     on?(event: string, listener: () => void): () => void;
 }
 /**
- * 插件入口：解析配置并注册五个语音工具。
+ * 插件入口：解析配置、注册五个语音工具并挂载 Voice Studio Web 路由。
  */
 export declare function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): void;
 export * from './config.js';
@@ -38,3 +39,4 @@ export * from './stt.js';
 export * from './tools.js';
 export * from './tts-text.js';
 export * from './voices.js';
+export * from './web.js';

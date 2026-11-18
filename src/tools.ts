@@ -5,21 +5,25 @@
  */
 import { openAsBlob, readFileSync, statSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import { isLoopbackBaseUrl, isValidProsody, resolveCustomVoice, type CustomVoiceAlias, type ResolvedVoiceConfig } from './config.js'
+import { isLoopbackBaseUrl, isValidProsody, resolveCustomVoice, type CustomVoiceAlias, type PronunciationRule, type ResolvedVoiceConfig } from './config.js'
 import { fetchEdgeVoices, synthesizeSpeech, synthesizeSpeechWithMetadata, type SubtitleCue } from './edge-tts.js'
-import { rateToSpeed, synthesizeOpenAiSpeech } from './openai-tts.js'
+import { rateToSpeed, synthesizeOpenAiSpeech, type ReferenceVoiceSample } from './openai-tts.js'
 import { assertAudioFile, assertWorkspaceFile, ensureWorkspaceDirectory, resolveOutputPath, writeWorkspaceFile } from './paths.js'
 import { createProxyFetch } from './proxy-fetch.js'
-import { assertAudioSize, formatSttSubtitles, hasFfmpeg, prepareAudioForAsr, transcribe, type SttSegment } from './stt.js'
+import { assertAudioSize, formatDiarizedTranscript, formatSttSubtitles, hasFfmpeg, prepareAudioForAsr, splitStereoChannelsForDiarization, transcribe, type SttSegment } from './stt.js'
 import {
+  applyPronunciationsPlain,
   cleanMarkdownForSpeech,
   concatMp3Buffers,
   createSilenceMp3,
-  estimateMp3DurationMs,
   formatSubtitles,
+  inspectMp3Buffer,
+  mixAudioWithBgm,
   normalizeAudioLoudness,
   offsetCues,
+  parseSubtitleFile,
   renderPreviewHtml,
+  scaleRatePercent,
   splitTextIntoChunks,
 } from './tts-text.js'
 import { filterVoices, isValidVoiceId, resolvePersona, VOICE_PERSONAS, VOICES } from './voices.js'
@@ -173,11 +177,56 @@ const listSchema = {
   additionalProperties: true,
 }
 
+function parseCallPronunciations(raw: unknown): PronunciationRule[] {
+  if (Array.isArray(raw)) {
+    const out: PronunciationRule[] = []
+    for (const item of raw) {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) continue
+      const rec = item as Record<string, unknown>
+      const word = typeof rec.word === 'string' ? rec.word.trim() : ''
+      const alias = typeof rec.alias === 'string' ? rec.alias.trim() : ''
+      if (word !== '' && alias !== '') out.push({ word, alias })
+    }
+    return out
+  }
+  if (typeof raw === 'object' && raw !== null) {
+    const out: PronunciationRule[] = []
+    for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof val !== 'string') continue
+      const word = key.trim()
+      const alias = val.trim()
+      if (word !== '' && alias !== '') out.push({ word, alias })
+    }
+    return out
+  }
+  return []
+}
+
+function mergePronunciations(
+  base: readonly PronunciationRule[] | undefined,
+  overrides: readonly PronunciationRule[],
+): PronunciationRule[] {
+  const merged = new Map<string, PronunciationRule>()
+  for (const rule of base ?? []) {
+    const word = rule.word.trim()
+    const alias = rule.alias.trim()
+    if (word !== '' && alias !== '') merged.set(word, { word, alias })
+  }
+  for (const rule of overrides) {
+    const word = rule.word.trim()
+    const alias = rule.alias.trim()
+    if (word !== '' && alias !== '') merged.set(word, { word, alias })
+  }
+  return Array.from(merged.values())
+}
+
 const ttsSchema = {
   type: 'object',
   properties: {
     output: { type: 'string' },
     bytes: { type: 'integer' },
+    durationMs: { type: 'integer' },
+    durationSec: { type: 'number' },
     voice: { type: 'string' },
     rate: { type: 'string' },
     pitch: { type: 'string' },
@@ -197,6 +246,7 @@ const sttSchema = {
     audio: { type: 'string' },
     transcriptFile: { type: 'string' },
     subtitleFile: { type: 'string' },
+    speakers: { type: 'array', items: { type: 'string' } },
   },
   additionalProperties: true,
 }
@@ -221,6 +271,9 @@ const MAX_TTS_CHARS = 100000
 
 /** 多角色对话/播客分段数上限。 */
 const MAX_TTS_SEGMENTS = 50
+
+/** 反向字幕卡点配音条目上限。 */
+const MAX_SUBTITLE_INPUT_CUES = 200
 
 /** OpenAI 兼容 TTS 默认模型。 */
 const FALLBACK_TTS_MODEL = 'gpt-4o-mini-tts'
@@ -248,10 +301,7 @@ interface PreviewOutcome {
   error?: string
 }
 
-interface VoiceReference {
-  audioDataUri: string
-  text?: string
-}
+type VoiceReference = ReferenceVoiceSample
 
 interface EffectiveVoiceInput {
   voice?: string
@@ -299,6 +349,8 @@ export interface VoiceToolDeps {
   prepareAudio?: typeof prepareAudioForAsr
   fetchVoices?: typeof fetchEdgeVoices
   normalizeAudio?: typeof normalizeAudioLoudness
+  mixBgm?: typeof mixAudioWithBgm
+  splitStereo?: typeof splitStereoChannelsForDiarization
 }
 
 /**
@@ -355,6 +407,7 @@ export function buildVoiceTools(
     cfg: ResolvedVoiceConfig,
     cwd: string,
     input: EffectiveVoiceInput,
+    refAudioCache?: Map<string, Buffer>,
   ): EffectiveVoiceSpec => {
     let customAlias: CustomVoiceAlias | undefined
     let voiceConsumedAsAlias = false
@@ -402,22 +455,28 @@ export function buildVoiceTools(
     const hasReferenceAudio = effectiveReferenceAudio !== undefined && effectiveReferenceAudio.trim() !== ''
     if (hasReferenceAudio) {
       const refPath = assertAudioFile(effectiveReferenceAudio, cwd)
-      const size = statSync(refPath).size
-      if (size <= 0) {
-        throw new Error('参考音频文件为空，无法用于音色克隆：' + effectiveReferenceAudio)
-      }
-      if (size > MAX_REFERENCE_AUDIO_BYTES) {
-        throw new Error('参考音频超过 10MB 上限（当前 ' + size + ' 字节），请裁剪为 5–10 秒人声片段：' + effectiveReferenceAudio)
-      }
-      const buf = readFileSync(refPath)
-      if (buf.length === 0 || buf.length > MAX_REFERENCE_AUDIO_BYTES) {
-        throw new Error('参考音频大小异常（必须为 1 字节至 10MB）：' + effectiveReferenceAudio)
+      let buf = refAudioCache?.get(refPath)
+      if (buf === undefined) {
+        const size = statSync(refPath).size
+        if (size <= 0) {
+          throw new Error('参考音频文件为空，无法用于音色克隆：' + effectiveReferenceAudio)
+        }
+        if (size > MAX_REFERENCE_AUDIO_BYTES) {
+          throw new Error('参考音频超过 10MB 上限（当前 ' + size + ' 字节），请裁剪为 5–10 秒人声片段：' + effectiveReferenceAudio)
+        }
+        buf = readFileSync(refPath)
+        if (buf.length === 0 || buf.length > MAX_REFERENCE_AUDIO_BYTES) {
+          throw new Error('参考音频大小异常（必须为 1 字节至 10MB）：' + effectiveReferenceAudio)
+        }
+        refAudioCache?.set(refPath, buf)
       }
       if (resolveUseEdge(cfg, true)) {
         throw new Error('零样本参考音频克隆（referenceAudio）需要兼容克隆的 TTS 引擎：请在 DSH「设置 → 插件 → 语音」将 ttsEngine 切换为 siliconflow（CosyVoice2-0.5B）或 custom（如本地 GPT-SoVITS / IndexTTS）。')
       }
       references = [{
         audioDataUri: 'data:' + mimeFromPath(refPath) + ';base64,' + buf.toString('base64'),
+        rawAudio: buf,
+        filename: basename(refPath),
         ...(effectiveReferenceText !== undefined && effectiveReferenceText.trim() !== '' ? { text: effectiveReferenceText.trim() } : {}),
       }]
     }
@@ -455,6 +514,38 @@ export function buildVoiceTools(
     return normalized
   }
 
+  const finalizeVoiceAudio = async (
+    rawAudio: Buffer,
+    bgmPath: string | undefined,
+    bgmVolume: number,
+    bgmDucking: boolean,
+    shouldNormalize: boolean,
+    signal: AbortSignal | undefined,
+  ): Promise<Buffer> => {
+    throwIfAborted(signal)
+    if (bgmPath !== undefined) {
+      if (deps.mixBgm === undefined && !hasFfmpeg()) {
+        throw new Error('使用 bgmFile 背景音乐自动闪避混音需要本机安装 ffmpeg（或使用 dsh-ffmpeg）。')
+      }
+      const mixed = await raceAbort(
+        (deps.mixBgm ?? mixAudioWithBgm)(
+          rawAudio,
+          {
+            bgmPath,
+            bgmVolume,
+            ducking: bgmDucking,
+            normalizeLoudness: shouldNormalize,
+          },
+          signal,
+        ),
+        signal,
+      )
+      throwIfAborted(signal)
+      return mixed
+    }
+    return await maybeNormalizeAudio(shouldNormalize, rawAudio, signal)
+  }
+
   const synthesizeChunk = async (
     cfg: ResolvedVoiceConfig,
     useEdge: boolean,
@@ -466,41 +557,45 @@ export function buildVoiceTools(
     signal: AbortSignal | undefined,
     instructions?: string,
     references?: VoiceReference[],
+    pronunciations?: readonly PronunciationRule[],
   ): Promise<ChunkSynthesisResult> => {
+    const hasPronunciations = pronunciations !== undefined && pronunciations.length > 0
     if (useEdge) {
+      const pronOpt = hasPronunciations ? { pronunciations } : {}
       if (!needSubtitles) {
         const ttsFn = deps.tts ?? (deps.ttsWithMeta !== undefined
           ? async (opts: Parameters<typeof synthesizeSpeech>[0], ttsDeps: Parameters<typeof synthesizeSpeech>[1], timeoutMs?: number, abortSig?: AbortSignal) =>
             (await deps.ttsWithMeta!(opts, ttsDeps, timeoutMs, abortSig)).audio
           : synthesizeSpeech)
-        const audio = await raceAbort(ttsFn({ text: chunkText, voice, rate, pitch }, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal), signal)
+        const audio = await raceAbort(ttsFn({ text: chunkText, voice, rate, pitch, ...pronOpt }, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal), signal)
         return { audio, cues: [] }
       }
       if (deps.ttsWithMeta !== undefined || deps.tts === undefined) {
         const withMetaFn = deps.ttsWithMeta ?? synthesizeSpeechWithMetadata
         const res = await raceAbort(
-          withMetaFn({ text: chunkText, voice, rate, pitch, boundary: 'sentence' }, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal),
+          withMetaFn({ text: chunkText, voice, rate, pitch, boundary: 'sentence', ...pronOpt }, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal),
           signal,
         )
         const cues = res.cues.length > 0
           ? res.cues
-          : [{ index: 1, startMs: 0, endMs: Math.max(1, estimateMp3DurationMs(res.audio)), text: chunkText }]
+          : [{ index: 1, startMs: 0, endMs: Math.max(1, inspectMp3Buffer(res.audio).durationMs), text: chunkText }]
         return { audio: res.audio, cues }
       }
-      const audio = await raceAbort(deps.tts({ text: chunkText, voice, rate, pitch }, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal), signal)
+      const audio = await raceAbort(deps.tts({ text: chunkText, voice, rate, pitch, ...pronOpt }, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal), signal)
       return {
         audio,
-        cues: [{ index: 1, startMs: 0, endMs: Math.max(1, estimateMp3DurationMs(audio)), text: chunkText }],
+        cues: [{ index: 1, startMs: 0, endMs: Math.max(1, inspectMp3Buffer(audio).durationMs), text: chunkText }],
       }
     }
 
+    const spokenText = hasPronunciations ? applyPronunciationsPlain(chunkText, pronunciations) : chunkText
     const openaiFn = deps.openaiTts ?? synthesizeOpenAiSpeech
     const audio = await raceAbort(
       openaiFn(
         cfg.ttsBaseUrl,
         cfg.ttsApiKey,
         {
-          text: chunkText,
+          text: spokenText,
           voice,
           model: cfg.ttsModel !== '' ? cfg.ttsModel : FALLBACK_TTS_MODEL,
           speed: rateToSpeed(rate),
@@ -517,7 +612,7 @@ export function buildVoiceTools(
     return {
       audio,
       cues: needSubtitles
-        ? [{ index: 1, startMs: 0, endMs: Math.max(1, estimateMp3DurationMs(audio)), text: chunkText }]
+        ? [{ index: 1, startMs: 0, endMs: Math.max(1, inspectMp3Buffer(audio).durationMs), text: chunkText }]
         : [],
     }
   }
@@ -632,10 +727,11 @@ export function buildVoiceTools(
   const voiceTts: VoiceToolDefinition = {
     name: 'voice_tts',
     isConcurrencySafe: () => !getCfg().overwrite,
-    description: '文字转语音：默认调用 edge-tts（微软 Edge 朗读服务，免费）合成 MP3，也可在设置中切换 OpenAI/SiliconFlow/自定义 TTS 引擎。支持内置角色人设 persona、自然语言情绪指令 instructions、5–10 秒参考音频零样本克隆 referenceAudio、多角色播客 segments、读取工作区 inputFile（自动清理 Markdown）、长文自动分段（≤100000 字符）、导出 .srt/.vtt 字幕与 -16 LUFS 响度均衡 normalizeLoudness；输出默认 voice_output.mp3。',
+    description: '文字转语音：默认调用 edge-tts（微软 Edge 朗读服务，免费）合成 MP3，也可在设置中切换 OpenAI/SiliconFlow/自定义 TTS 引擎。支持内置角色人设 persona、自然语言情绪指令 instructions、5–10 秒参考音频零样本克隆 referenceAudio、自定义发音词典 pronunciations、多角色播客 segments、读取工作区 inputFile（自动清理 Markdown）、按 .srt/.vtt 字幕时间轴反向卡点配音 subtitleInput、背景音乐自动闪避混音 bgmFile、长文自动分段（≤100000 字符）、导出 .srt/.vtt 字幕与 -16 LUFS 响度均衡 normalizeLoudness，并返回精确时长 durationMs/durationSec；输出默认 voice_output.mp3。',
     parameters: compileParameters({
-      text: { type: 'string', description: '要合成的文本（若提供 inputFile 或 segments 则可选；支持长文本自动分段，≤100000 字符）。' },
+      text: { type: 'string', description: '要合成的文本（若提供 inputFile、segments 或 subtitleInput 则可选；支持长文本自动分段，≤100000 字符）。' },
       inputFile: { type: 'string', description: '工作区内文稿文件路径（可选，如 article.md；指定时直接从文件读取）。' },
+      subtitleInput: { type: 'string', description: '按现有 .srt/.vtt 字幕时间轴反向卡点配音（可选，工作区内字幕路径；每条字幕超出时间窗时自动微调语速加速，句间自动补齐精确静音以对齐原视频画面）。' },
       cleanMarkdown: { type: 'boolean', description: '是否清理 Markdown 语法以便朗读（可选；inputFile 为 .md/.markdown 时默认 true）。' },
       segments: {
         type: 'array',
@@ -663,6 +759,21 @@ export function buildVoiceTools(
       instructions: { type: 'string', description: '自然语言情绪/语气指令（可选，OpenAI gpt-4o-mini-tts 与 SiliconFlow CosyVoice2 可用，如“用开心轻快的语气说”，支持 [laughter] / [breath]）。' },
       referenceAudio: { type: 'string', description: '零样本克隆参考音频路径（可选，会话工作区内 5–10 秒干净人声，≤10MB；需 siliconflow 或 custom 引擎）。' },
       referenceText: { type: 'string', description: '参考音频对应的原始台词文本（可选，零样本克隆推荐填写）。' },
+      pronunciations: {
+        type: 'array',
+        description: '发音替读规则数组（可选，如 [{ word: "Nginx", alias: "Engine X" }]，与设置中的 pronunciations 合并，同名以本次参数优先；字幕保留原词，朗读按 alias 发音）。',
+        items: {
+          type: 'object',
+          properties: {
+            word: { type: 'string' },
+            alias: { type: 'string' },
+          },
+          required: ['word', 'alias'],
+        },
+      },
+      bgmFile: { type: 'string', description: '背景音乐文件路径（可选，工作区内音频文件；需本机安装 ffmpeg，将自动循环铺底并在人声出现时自动闪避降音）。' },
+      bgmVolume: { type: 'number', minimum: 0.02, maximum: 1, default: 0.18, description: '背景音乐相对音量（可选，0.02–1.0，默认 0.18）。' },
+      bgmDucking: { type: 'boolean', default: true, description: '人声说话时是否自动压低背景音乐音量（Auto-Ducking，可选，默认 true）。' },
       normalizeLoudness: { type: 'boolean', default: false, description: '是否在合成后通过 ffmpeg 执行 -16 LUFS 播客响度均衡（可选，默认 false）。' },
       output: { type: 'string', description: '输出 MP3 路径（可选，相对路径按会话工作目录解析）。' },
       subtitleOutput: { type: 'string', description: '导出同步字幕文件路径（可选，.srt 或 .vtt，相对路径按会话工作目录解析）。' },
@@ -673,7 +784,8 @@ export function buildVoiceTools(
         const rec = asRecord(value)
         const chunksInfo = typeof rec.chunks === 'number' && rec.chunks > 1 ? '，共 ' + rec.chunks + ' 段' : ''
         const voiceLabel = typeof rec.voice === 'string' && rec.voice !== '' ? rec.voice : '参考音频克隆'
-        const lines = ['语音合成完成：' + rec.output + '（' + rec.bytes + ' 字节，音色 ' + voiceLabel + chunksInfo + '）']
+        const durationInfo = typeof rec.durationSec === 'number' ? '，时长 ' + rec.durationSec + ' 秒' : ''
+        const lines = ['语音合成完成：' + rec.output + '（' + rec.bytes + ' 字节，音色 ' + voiceLabel + chunksInfo + durationInfo + '）']
         const subtitleFile = typeof rec.subtitleFile === 'string' ? rec.subtitleFile : ''
         if (subtitleFile !== '') lines.push('字幕文件已写入：' + subtitleFile)
         return [{ type: 'text', text: lines.join('\n') }]
@@ -696,6 +808,22 @@ export function buildVoiceTools(
       const requested = optionalString(args, 'output')
       const subtitleOutput = optionalString(args, 'subtitleOutput')
       const needSubtitles = subtitleOutput !== undefined
+      const mergedPronunciations = mergePronunciations(cfg.pronunciations, parseCallPronunciations(args.pronunciations))
+
+      const bgmFile = optionalString(args, 'bgmFile')
+      let bgmPath: string | undefined
+      let bgmVolume = 0.18
+      if (bgmFile !== undefined) {
+        bgmPath = assertAudioFile(bgmFile, cwd)
+        if (deps.mixBgm === undefined && !hasFfmpeg()) {
+          throw new Error('使用 bgmFile 背景音乐自动闪避混音需要本机安装 ffmpeg（或使用 dsh-ffmpeg）。')
+        }
+        if (typeof args.bgmVolume === 'number' && Number.isFinite(args.bgmVolume)) {
+          bgmVolume = Math.min(1.0, Math.max(0.02, args.bgmVolume))
+        }
+      }
+      const bgmDucking = args.bgmDucking !== false
+      const refAudioCache = new Map<string, Buffer>()
 
       const rawSegments = Array.isArray(args.segments) && args.segments.length > 0 ? args.segments : undefined
       if (rawSegments !== undefined) {
@@ -710,7 +838,7 @@ export function buildVoiceTools(
           instructions: topInstructions,
           referenceAudio: topReferenceAudio,
           referenceText: topReferenceText,
-        })
+        }, refAudioCache)
         const parsedSegments: ParsedSegment[] = []
         let totalChars = 0
         for (let i = 0; i < rawSegments.length; i++) {
@@ -743,7 +871,7 @@ export function buildVoiceTools(
               instructions: segInstructions ?? topInstructions,
               referenceAudio: segReferenceAudio ?? topReferenceAudio,
               referenceText: segReferenceText ?? topReferenceText,
-            })
+            }, refAudioCache)
           } else if (segReferenceAudio !== undefined) {
             segSpec = resolveEffectiveVoiceSpec(cfg, cwd, {
               voice: topVoice,
@@ -754,10 +882,10 @@ export function buildVoiceTools(
               instructions: segInstructions ?? topInstructions,
               referenceAudio: segReferenceAudio,
               referenceText: segReferenceText ?? topReferenceText,
-            })
+            }, refAudioCache)
           } else {
             const reusedRefs = topSpec.references !== undefined && segReferenceText !== undefined
-              ? topSpec.references.map((r) => ({ audioDataUri: r.audioDataUri, text: segReferenceText }))
+              ? topSpec.references.map((r) => ({ ...r, text: segReferenceText }))
               : topSpec.references
             segSpec = {
               voice: topSpec.voice,
@@ -821,7 +949,19 @@ export function buildVoiceTools(
           }
         }
         const chunkResults = await mapLimit(tasks, TTS_CHUNK_CONCURRENCY, signal, (task) =>
-          synthesizeChunk(cfg, task.useEdge, task.text, task.voice, task.rate, task.pitch, needSubtitles, signal, task.instructions, task.references),
+          synthesizeChunk(
+            cfg,
+            task.useEdge,
+            task.text,
+            task.voice,
+            task.rate,
+            task.pitch,
+            needSubtitles,
+            signal,
+            task.instructions,
+            task.references,
+            mergedPronunciations,
+          ),
         )
         throwIfAborted(signal)
 
@@ -830,12 +970,15 @@ export function buildVoiceTools(
         let offsetMs = 0
         let cueIndex = 1
         let resultIdx = 0
+        let detectedSampleRate = 24000
         for (let s = 0; s < parsedSegments.length; s++) {
           const seg = parsedSegments[s]
           for (let c = 0; c < seg.chunks.length; c++) {
             const res = chunkResults[resultIdx++]
             buffers.push(res.audio)
-            const chunkDurationMs = estimateMp3DurationMs(res.audio)
+            const chunkInfo = inspectMp3Buffer(res.audio)
+            if (chunkInfo.frameCount > 0) detectedSampleRate = chunkInfo.sampleRate
+            const chunkDurationMs = chunkInfo.durationMs
             if (needSubtitles) {
               const shifted = offsetCues(res.cues, offsetMs, cueIndex)
               allCues.push(...shifted)
@@ -845,23 +988,140 @@ export function buildVoiceTools(
             }
           }
           if (s < parsedSegments.length - 1 && seg.pauseMs > 0) {
-            const silence = createSilenceMp3(seg.pauseMs)
+            const silence = createSilenceMp3(seg.pauseMs, detectedSampleRate)
             if (silence.length > 0) {
               buffers.push(silence)
-              offsetMs += estimateMp3DurationMs(silence)
+              offsetMs += inspectMp3Buffer(silence).durationMs
             }
           }
         }
 
         let audio = buffers.length === 1 ? buffers[0] : concatMp3Buffers(buffers)
-        audio = await maybeNormalizeAudio(normalizeLoudness, audio, signal)
+        audio = await finalizeVoiceAudio(audio, bgmPath, bgmVolume, bgmDucking, normalizeLoudness, signal)
+        const finalInfo = inspectMp3Buffer(audio)
+        const durationMs = finalInfo.durationMs
+        const durationSec = Math.round(durationMs / 100) / 10
         const output = writeWorkspaceFile(resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd), audio, cwd, undefined, cfg.overwrite)
         let subtitleFile = ''
         if (subtitleOutput !== undefined) {
           const formatted = formatSubtitles(allCues, subtitleFormatOf(subtitleOutput))
           subtitleFile = writeWorkspaceFile(resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd), formatted, cwd, undefined, cfg.overwrite)
         }
-        return { output, bytes: audio.length, voice: topSpec.voice, rate: topSpec.rate, pitch: topSpec.pitch, textLength: totalChars, chunks: tasks.length, subtitleFile }
+        return { output, bytes: audio.length, durationMs, durationSec, voice: topSpec.voice, rate: topSpec.rate, pitch: topSpec.pitch, textLength: totalChars, chunks: tasks.length, subtitleFile }
+      }
+
+      const subtitleInput = optionalString(args, 'subtitleInput')
+      if (subtitleInput !== undefined) {
+        const resolvedSub = assertWorkspaceFile(subtitleInput, cwd, '字幕文件')
+        const rawSub = readFileSync(resolvedSub, 'utf8')
+        const cues = parseSubtitleFile(rawSub)
+        if (cues.length === 0) {
+          throw new Error('字幕文件未解析出任何有效字幕条目：' + subtitleInput)
+        }
+        if (cues.length > MAX_SUBTITLE_INPUT_CUES) {
+          throw new Error('subtitleInput 最多支持 ' + MAX_SUBTITLE_INPUT_CUES + ' 条字幕（当前 ' + cues.length + ' 条），请拆分为多段处理。')
+        }
+
+        const spec = resolveEffectiveVoiceSpec(cfg, cwd, {
+          voice: topVoice,
+          persona: topPersona,
+          rate: topRate,
+          pitch: topPitch,
+          instructions: topInstructions,
+          referenceAudio: topReferenceAudio,
+          referenceText: topReferenceText,
+        }, refAudioCache)
+        const useEdge = resolveUseEdge(cfg, spec.hasReferenceAudio)
+        assertTtsEngineReady(cfg, useEdge)
+        assertTtsVoice(spec.voice, useEdge, spec.references !== undefined)
+        assertProsody(spec.rate, spec.pitch)
+        resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd)
+        if (subtitleOutput !== undefined) resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd)
+
+        const cueResults = await mapLimit(cues, TTS_CHUNK_CONCURRENCY, signal, async (cue) => {
+          const cueText = args.cleanMarkdown === true
+            ? (cleanMarkdownForSpeech(cue.text).trim() || cue.text.trim())
+            : cue.text.trim()
+          let res = await synthesizeChunk(
+            cfg,
+            useEdge,
+            cueText,
+            spec.voice,
+            spec.rate,
+            spec.pitch,
+            false,
+            signal,
+            spec.instructions,
+            spec.references,
+            mergedPronunciations,
+          )
+          const actualMs = inspectMp3Buffer(res.audio).durationMs
+          const windowMs = Math.max(200, cue.endMs - cue.startMs)
+          if (actualMs > windowMs * 1.08) {
+            const fastRate = scaleRatePercent(spec.rate, actualMs / windowMs)
+            if (fastRate !== spec.rate) {
+              res = await synthesizeChunk(
+                cfg,
+                useEdge,
+                cueText,
+                spec.voice,
+                fastRate,
+                spec.pitch,
+                false,
+                signal,
+                spec.instructions,
+                spec.references,
+                mergedPronunciations,
+              )
+            }
+          }
+          return { audio: res.audio, textLength: cueText.length }
+        })
+        throwIfAborted(signal)
+
+        const buffers: Buffer[] = []
+        const outCues: SubtitleCue[] = []
+        let cursorMs = 0
+        let detectedSampleRate = 24000
+        let totalChars = 0
+
+        for (let i = 0; i < cues.length; i++) {
+          const cue = cues[i]
+          const cueAudio = cueResults[i].audio
+          totalChars += cueResults[i].textLength
+          const cueInfo = inspectMp3Buffer(cueAudio)
+          if (cueInfo.frameCount > 0) detectedSampleRate = cueInfo.sampleRate
+
+          if (cue.startMs > cursorMs) {
+            const pad = createSilenceMp3(cue.startMs - cursorMs, detectedSampleRate)
+            if (pad.length > 0) {
+              buffers.push(pad)
+              cursorMs += inspectMp3Buffer(pad).durationMs
+            }
+          }
+          const cueStartMs = cursorMs
+          buffers.push(cueAudio)
+          cursorMs += cueInfo.durationMs
+          outCues.push({
+            index: i + 1,
+            startMs: cueStartMs,
+            endMs: Math.max(cueStartMs + 1, cursorMs),
+            text: cue.text,
+          })
+        }
+
+        let audio = buffers.length === 1 ? buffers[0] : concatMp3Buffers(buffers)
+        audio = await finalizeVoiceAudio(audio, bgmPath, bgmVolume, bgmDucking, normalizeLoudness, signal)
+        const finalInfo = inspectMp3Buffer(audio)
+        const durationMs = finalInfo.durationMs
+        const durationSec = Math.round(durationMs / 100) / 10
+        const output = writeWorkspaceFile(resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd), audio, cwd, undefined, cfg.overwrite)
+        let subtitleFile = ''
+        if (subtitleOutput !== undefined) {
+          const formatted = formatSubtitles(outCues, subtitleFormatOf(subtitleOutput))
+          subtitleFile = writeWorkspaceFile(resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd), formatted, cwd, undefined, cfg.overwrite)
+        }
+        return { output, bytes: audio.length, durationMs, durationSec, voice: spec.voice, rate: spec.rate, pitch: spec.pitch, textLength: totalChars, chunks: cues.length, subtitleFile }
       }
 
       const inputFile = optionalString(args, 'inputFile')
@@ -894,7 +1154,7 @@ export function buildVoiceTools(
         instructions: topInstructions,
         referenceAudio: topReferenceAudio,
         referenceText: topReferenceText,
-      })
+      }, refAudioCache)
       const useEdge = resolveUseEdge(cfg, spec.hasReferenceAudio)
       assertTtsEngineReady(cfg, useEdge)
       assertTtsVoice(spec.voice, useEdge, spec.references !== undefined)
@@ -907,13 +1167,13 @@ export function buildVoiceTools(
       let subtitleFile = ''
 
       if (finalText.length <= 5000 && !needSubtitles && useEdge) {
-        const res = await synthesizeChunk(cfg, true, finalText, spec.voice, spec.rate, spec.pitch, false, signal, spec.instructions, spec.references)
+        const res = await synthesizeChunk(cfg, true, finalText, spec.voice, spec.rate, spec.pitch, false, signal, spec.instructions, spec.references, mergedPronunciations)
         audio = res.audio
       } else {
         const chunks = splitTextIntoChunks(finalText, 2800)
         chunkCount = chunks.length
         const results = await mapLimit(chunks, TTS_CHUNK_CONCURRENCY, signal, (chunk) =>
-          synthesizeChunk(cfg, useEdge, chunk, spec.voice, spec.rate, spec.pitch, needSubtitles, signal, spec.instructions, spec.references),
+          synthesizeChunk(cfg, useEdge, chunk, spec.voice, spec.rate, spec.pitch, needSubtitles, signal, spec.instructions, spec.references, mergedPronunciations),
         )
         throwIfAborted(signal)
         audio = results.length === 1 ? results[0].audio : concatMp3Buffers(results.map((r) => r.audio))
@@ -925,7 +1185,7 @@ export function buildVoiceTools(
             const shifted = offsetCues(res.cues, offsetMs, cueIndex)
             allCues.push(...shifted)
             cueIndex += shifted.length
-            const chunkDurationMs = estimateMp3DurationMs(res.audio)
+            const chunkDurationMs = inspectMp3Buffer(res.audio).durationMs
             const cueSpan = shifted.length > 0 ? Math.max(0, shifted[shifted.length - 1].endMs - offsetMs) : 0
             offsetMs += Math.max(chunkDurationMs, cueSpan)
           }
@@ -935,9 +1195,12 @@ export function buildVoiceTools(
       }
 
       throwIfAborted(signal)
-      audio = await maybeNormalizeAudio(normalizeLoudness, audio, signal)
+      audio = await finalizeVoiceAudio(audio, bgmPath, bgmVolume, bgmDucking, normalizeLoudness, signal)
+      const finalInfo = inspectMp3Buffer(audio)
+      const durationMs = finalInfo.durationMs
+      const durationSec = Math.round(durationMs / 100) / 10
       const output = writeWorkspaceFile(resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd), audio, cwd, undefined, cfg.overwrite)
-      return { output, bytes: audio.length, voice: spec.voice, rate: spec.rate, pitch: spec.pitch, textLength: finalText.length, chunks: chunkCount, subtitleFile }
+      return { output, bytes: audio.length, durationMs, durationSec, voice: spec.voice, rate: spec.rate, pitch: spec.pitch, textLength: finalText.length, chunks: chunkCount, subtitleFile }
     },
     get timeoutMs() { return getCfg().timeoutMs + 10000 },
   }
@@ -945,7 +1208,7 @@ export function buildVoiceTools(
   const voiceStt: VoiceToolDefinition = {
     name: 'voice_stt',
     isConcurrencySafe: () => !getCfg().overwrite,
-    description: '语音转文字：调用 OpenAI 兼容 ASR 接口（默认 Groq whisper-large-v3-turbo；可切 openai/siliconflow/custom）。audio 为音频文件路径（mp3/wav/m4a/ogg/flac，≤25MB；超过 25MB 可设 autoCompress=true 用 ffmpeg 自动压缩分段）；language/prompt 可选；output 可写 .txt，subtitleOutput 可写 .srt/.vtt 字幕。',
+    description: '语音转文字：调用 OpenAI 兼容 ASR 接口（默认 Groq whisper-large-v3-turbo；可切 openai/siliconflow/custom）。audio 为音频文件路径（mp3/wav/m4a/ogg/flac，≤25MB；超过 25MB 可设 autoCompress=true 用 ffmpeg 自动压缩分段）；支持多人说话人区分 diarize=true（双声道按声道分离或推断说话人切换）；language/prompt 可选；output 可写 .txt，subtitleOutput 可写 .srt/.vtt 字幕。',
     parameters: compileParameters({
       audio: { type: 'string', required: true, description: '音频文件路径（必填）。' },
       engine: { type: 'string', enum: ['groq', 'openai', 'custom'], description: '引擎（可选）：只接受与配置 asrEngine 相同的值，用于显式确认；接口地址与密钥始终取配置。' },
@@ -955,6 +1218,7 @@ export function buildVoiceTools(
       output: { type: 'string', description: '把转写文本写成 .txt 的路径（可选，相对路径按会话工作目录解析）。' },
       subtitleOutput: { type: 'string', description: '导出字幕路径（可选，.srt 或 .vtt，相对路径按会话工作目录解析；指定时自动开启时间戳）。' },
       timestamps: { type: 'boolean', description: '是否请求分段时间戳（可选，默认 false）。' },
+      diarize: { type: 'boolean', description: '是否启用多人说话人区分（可选，默认 false；双声道录音在有 ffmpeg 时可按声道分离，或解析/推断说话人切换并输出 [说话人 A] 标记）。' },
       autoCompress: { type: 'boolean', description: '超过 25MB 时是否自动调用本地 ffmpeg 压缩与分段转写（可选，默认 false）。' },
     }),
     output: {
@@ -996,16 +1260,28 @@ export function buildVoiceTools(
       const model = optionalString(args, 'model') ?? (cfg.asrModel !== '' ? cfg.asrModel : FALLBACK_ASR_MODEL)
       const language = optionalString(args, 'language')
       const prompt = optionalString(args, 'prompt')
-      const needTimestamps = args.timestamps === true || subtitleOutput !== undefined
+      const diarize = args.diarize === true
+      const needTimestamps = args.timestamps === true || subtitleOutput !== undefined || diarize
       const allowEmptyApiKey = cfg.asrEngine === 'custom' && isLoopbackBaseUrl(baseUrl)
       const fetchImpl = getProxyFetch(cfg.proxyUrl) ?? globalThis.fetch
       const sttFn = deps.stt ?? transcribe
+
+      const collectSpeakers = (segs: readonly SttSegment[] | undefined, explicit?: readonly string[]): string[] | undefined => {
+        if (Array.isArray(explicit) && explicit.length > 0) return [...explicit]
+        if (!Array.isArray(segs)) return undefined
+        const uniq = new Set<string>()
+        for (const s of segs) {
+          if (typeof s.speaker === 'string' && s.speaker.trim() !== '') uniq.add(s.speaker.trim())
+        }
+        return uniq.size > 0 ? Array.from(uniq) : undefined
+      }
 
       const fileSize = statSync(audioPath).size
       let text = ''
       let detectedLanguage = ''
       let duration: number | undefined
       let segments: SttSegment[] | undefined
+      let speakers: string[] | undefined
 
       if (fileSize > MAX_ASR_BYTES) {
         if (args.autoCompress !== true) assertAudioSize(fileSize)
@@ -1022,12 +1298,14 @@ export function buildVoiceTools(
               language,
               prompt,
               timestamps: needTimestamps,
+              ...(diarize ? { diarize: true } : {}),
               allowEmptyApiKey,
             }, fetchImpl, cfg.timeoutMs, signal), signal)
             return { chunk, res }
           })
           throwIfAborted(signal)
-          text = chunkResults.map((item) => item.res.text.trim()).filter(Boolean).join('\n')
+          const rawText = chunkResults.map((item) => item.res.text.trim()).filter(Boolean).join('\n')
+          text = rawText
           detectedLanguage = chunkResults.find((item) => typeof item.res.language === 'string' && item.res.language !== '')?.res.language ?? ''
           let totalDuration = 0
           let hasDuration = false
@@ -1045,43 +1323,129 @@ export function buildVoiceTools(
                   start: seg.start + chunk.offsetSeconds,
                   end: seg.end + chunk.offsetSeconds,
                   text: seg.text,
+                  ...(seg.speaker !== undefined ? { speaker: seg.speaker } : {}),
                 })
               }
             }
           }
           if (hasDuration) duration = totalDuration
           if (mergedSegments.length > 0) segments = mergedSegments
+          if (diarize) {
+            if (mergedSegments.some((s) => typeof s.speaker === 'string' && s.speaker.trim() !== '')) {
+              const diarized = formatDiarizedTranscript(mergedSegments)
+              if (diarized !== '') text = diarized
+            }
+            speakers = collectSpeakers(mergedSegments, chunkResults.flatMap((item) => item.res.speakers ?? []))
+          }
         } finally {
           prep.cleanup()
         }
       } else {
-        let audioInput: Buffer | Blob
-        if (deps.stt !== undefined) {
-          // 保持单元测试兼容性：注入假 stt 时传 Buffer（部分测试会对 captured.audio 做扩展运算符迭代）。
-          const buf = readFileSync(audioPath)
-          assertAudioSize(buf.length)
-          audioInput = buf
-        } else {
-          let blob: Buffer | Blob = await openAsBlob(audioPath, { type: mimeFromPath(audioPath) })
-          // 伪文件（如 procfs）size 报 0 字节，回退到 readFileSync 再判一次。
-          if (blob.size === 0) blob = readFileSync(audioPath)
-          assertAudioSize(Buffer.isBuffer(blob) ? blob.length : blob.size)
-          audioInput = blob
+        let handledStereo = false
+        if (diarize && (deps.splitStereo !== undefined || (deps.stt === undefined && hasFfmpeg()))) {
+          const stereo = await raceAbort((deps.splitStereo ?? splitStereoChannelsForDiarization)(audioPath, signal), signal)
+          if (stereo !== null && stereo.channels.length > 0) {
+            handledStereo = true
+            try {
+              const channelResults = await mapLimit(stereo.channels, 2, signal, async (ch) => {
+                const res = await raceAbort(sttFn(baseUrl, cfg.asrApiKey, {
+                  audio: ch.audio,
+                  filename: ch.filename,
+                  model,
+                  language,
+                  prompt,
+                  timestamps: true,
+                  allowEmptyApiKey,
+                }, fetchImpl, cfg.timeoutMs, signal), signal)
+                return { ch, res }
+              })
+              throwIfAborted(signal)
+
+              const mergedSegments: SttSegment[] = []
+              let totalDuration = 0
+              let hasDuration = false
+              for (const { ch, res } of channelResults) {
+                if (detectedLanguage === '' && typeof res.language === 'string' && res.language !== '') {
+                  detectedLanguage = res.language
+                }
+                if (typeof res.duration === 'number' && Number.isFinite(res.duration)) {
+                  totalDuration = Math.max(totalDuration, res.duration)
+                  hasDuration = true
+                }
+                if (Array.isArray(res.segments) && res.segments.length > 0) {
+                  for (const seg of res.segments) {
+                    mergedSegments.push({
+                      id: seg.id,
+                      start: seg.start,
+                      end: seg.end,
+                      text: seg.text,
+                      speaker: ch.speaker,
+                    })
+                  }
+                } else if (res.text.trim() !== '') {
+                  mergedSegments.push({
+                    id: 0,
+                    start: 0,
+                    end: typeof res.duration === 'number' && Number.isFinite(res.duration) ? res.duration : 0,
+                    text: res.text.trim(),
+                    speaker: ch.speaker,
+                  })
+                }
+              }
+              mergedSegments.sort((a, b) => a.start - b.start)
+              for (let i = 0; i < mergedSegments.length; i++) {
+                mergedSegments[i] = { ...mergedSegments[i], id: i + 1 }
+              }
+              if (hasDuration) duration = totalDuration
+              if (mergedSegments.length > 0) segments = mergedSegments
+              const rawFallback = channelResults.map((item) => item.res.text.trim()).filter(Boolean).join('\n')
+              const diarized = formatDiarizedTranscript(mergedSegments)
+              text = diarized !== '' ? diarized : rawFallback
+              speakers = collectSpeakers(mergedSegments)
+            } finally {
+              stereo.cleanup()
+            }
+          }
         }
-        const res = await raceAbort(sttFn(baseUrl, cfg.asrApiKey, {
-          audio: audioInput,
-          filename: basename(audioPath),
-          model,
-          language,
-          prompt,
-          timestamps: needTimestamps,
-          allowEmptyApiKey,
-        }, fetchImpl, cfg.timeoutMs, signal), signal)
-        throwIfAborted(signal)
-        text = res.text
-        detectedLanguage = res.language ?? ''
-        duration = res.duration
-        segments = res.segments
+
+        if (!handledStereo) {
+          let audioInput: Buffer | Blob
+          if (deps.stt !== undefined) {
+            // 保持单元测试兼容性：注入假 stt 时传 Buffer（部分测试会对 captured.audio 做扩展运算符迭代）。
+            const buf = readFileSync(audioPath)
+            assertAudioSize(buf.length)
+            audioInput = buf
+          } else {
+            let blob: Buffer | Blob = await openAsBlob(audioPath, { type: mimeFromPath(audioPath) })
+            // 伪文件（如 procfs）size 报 0 字节，回退到 readFileSync 再判一次。
+            if (blob.size === 0) blob = readFileSync(audioPath)
+            assertAudioSize(Buffer.isBuffer(blob) ? blob.length : blob.size)
+            audioInput = blob
+          }
+          const res = await raceAbort(sttFn(baseUrl, cfg.asrApiKey, {
+            audio: audioInput,
+            filename: basename(audioPath),
+            model,
+            language,
+            prompt,
+            timestamps: needTimestamps,
+            ...(diarize ? { diarize: true } : {}),
+            allowEmptyApiKey,
+          }, fetchImpl, cfg.timeoutMs, signal), signal)
+          throwIfAborted(signal)
+          const rawText = res.text
+          text = rawText
+          detectedLanguage = res.language ?? ''
+          duration = res.duration
+          segments = res.segments
+          if (diarize) {
+            if (Array.isArray(res.segments) && res.segments.some((s) => typeof s.speaker === 'string' && s.speaker.trim() !== '')) {
+              const diarized = formatDiarizedTranscript(res.segments)
+              if (diarized !== '') text = diarized
+            }
+            speakers = collectSpeakers(res.segments, res.speakers)
+          }
+        }
       }
 
       let transcriptFile = ''
@@ -1110,6 +1474,7 @@ export function buildVoiceTools(
         subtitleFile,
         ...(duration !== undefined ? { duration } : {}),
         ...(segments !== undefined ? { segments } : {}),
+        ...(speakers !== undefined && speakers.length > 0 ? { speakers } : {}),
       }
     },
     get timeoutMs() { return getCfg().timeoutMs + 10000 },

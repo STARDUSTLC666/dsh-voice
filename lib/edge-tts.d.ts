@@ -9,6 +9,10 @@ export interface TtsOptions {
     voice: string;
     rate: string;
     pitch: string;
+    pronunciations?: ReadonlyArray<{
+        word: string;
+        alias: string;
+    }>;
 }
 /** 字幕时间轴条目（毫秒级）。 */
 export interface SubtitleCue {

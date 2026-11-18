@@ -136,20 +136,222 @@ export function stripId3v2(mp3: Buffer): Buffer {
   return mp3.subarray(totalHeader)
 }
 
+/** MP3 音频元信息（由帧头 / Xing / Info / VBRI 解析得出）。 */
+export interface Mp3AudioInfo {
+  durationMs: number
+  sampleRate: number
+  channels: 1 | 2
+  bitrateKbps: number
+  isVbr: boolean
+  frameCount: number
+}
+
+const MPEG1_BITRATES = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+const MPEG2_BITRATES = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
+const SAMPLE_RATES_BY_VERSION: Record<number, readonly [number, number, number]> = {
+  3: [44100, 48000, 32000], // MPEG-1
+  2: [22050, 24000, 16000], // MPEG-2
+  0: [11025, 12000, 8000],  // MPEG-2.5
+}
+
+interface ParsedFrameHeader {
+  versionBits: number
+  sampleRate: number
+  channels: 1 | 2
+  bitrateKbps: number
+  samplesPerFrame: number
+  frameSize: number
+  sideInfoSize: number
+}
+
+function parseMp3FrameHeader(buf: Buffer, offset: number): ParsedFrameHeader | null {
+  if (offset + 4 > buf.length) return null
+  if (buf[offset] !== 0xff || (buf[offset + 1] & 0xe0) !== 0xe0) return null
+
+  const b1 = buf[offset + 1]
+  const b2 = buf[offset + 2]
+  const b3 = buf[offset + 3]
+
+  const versionBits = (b1 >> 3) & 3
+  if (versionBits === 1) return null // reserved
+  const layerBits = (b1 >> 1) & 3
+  if (layerBits !== 1) return null // Layer III only
+
+  const bitrateIdx = (b2 >> 4) & 0x0f
+  if (bitrateIdx === 0 || bitrateIdx === 15) return null
+  const sampleRateIdx = (b2 >> 2) & 3
+  if (sampleRateIdx === 3) return null
+
+  const isMpeg1 = versionBits === 3
+  const bitrateKbps = isMpeg1 ? MPEG1_BITRATES[bitrateIdx] : MPEG2_BITRATES[bitrateIdx]
+  const sampleRate = SAMPLE_RATES_BY_VERSION[versionBits][sampleRateIdx]
+  const padding = (b2 >> 1) & 1
+  const channelMode = (b3 >> 6) & 3
+  const channels: 1 | 2 = channelMode === 3 ? 1 : 2
+  const samplesPerFrame = isMpeg1 ? 1152 : 576
+  const frameSize = Math.floor(((isMpeg1 ? 144 : 72) * bitrateKbps * 1000) / sampleRate) + padding
+  if (frameSize < 4 || offset + frameSize > buf.length) return null
+
+  const sideInfoSize = isMpeg1 ? (channels === 1 ? 17 : 32) : (channels === 1 ? 9 : 17)
+  return { versionBits, sampleRate, channels, bitrateKbps, samplesPerFrame, frameSize, sideInfoSize }
+}
+
+function stripId3v1(buf: Buffer): Buffer {
+  if (buf.length >= 128 && buf[buf.length - 128] === 0x54 && buf[buf.length - 127] === 0x41 && buf[buf.length - 126] === 0x47) {
+    return buf.subarray(0, buf.length - 128)
+  }
+  return buf
+}
+
 /**
- * 生成合法的 MPEG-2 Layer III（24kHz 48kbps 单声道）静音 MP3 帧，每帧 144 字节 / 24ms。
+ * 精确解析 MP3 缓冲的采样率、声道、比特率、帧数与时长；
+ * 支持 ID3v2 / ID3v1 剥离、Xing / Info / VBRI VBR 头与逐帧扫描；
+ * 对非真实 MP3 帧的测试占位缓冲按 48kbps 估算兜底。
  */
-export function createSilenceMp3(durationMs: number): Buffer {
+export function inspectMp3Buffer(mp3: Buffer): Mp3AudioInfo {
+  const afterId3v2 = stripId3v2(mp3)
+  const data = stripId3v1(afterId3v2)
+
+  let offset = 0
+  let frameCount = 0
+  let totalDurationMs = 0
+  let bitrateSum = 0
+  let firstSampleRate = 24000
+  let firstChannels: 1 | 2 = 1
+  let firstBitrate = 48
+  let isVbr = false
+
+  while (offset + 4 <= data.length) {
+    // 跳过拼接流中可能残留的 ID3v2 标签头
+    if (data[offset] === 0x49 && data[offset + 1] === 0x44 && data[offset + 2] === 0x33 && offset + 10 <= data.length) {
+      const stripped = stripId3v2(data.subarray(offset))
+      const skipped = data.length - offset - stripped.length
+      if (skipped > 0) {
+        offset += skipped
+        continue
+      }
+    }
+
+    const header = parseMp3FrameHeader(data, offset)
+    if (header === null) {
+      offset += 1
+      continue
+    }
+
+    if (frameCount === 0) {
+      firstSampleRate = header.sampleRate
+      firstChannels = header.channels
+      firstBitrate = header.bitrateKbps
+
+      const xingOffset = offset + 4 + header.sideInfoSize
+      if (xingOffset + 12 <= offset + header.frameSize) {
+        const tag = data.subarray(xingOffset, xingOffset + 4).toString('ascii')
+        if (tag === 'Xing' || tag === 'Info') {
+          const flags = data.readUInt32BE(xingOffset + 4)
+          if ((flags & 0x01) !== 0 && xingOffset + 12 <= data.length) {
+            const totalFrames = data.readUInt32BE(xingOffset + 8)
+            if (totalFrames > 0) {
+              const durationMs = Math.round((totalFrames * header.samplesPerFrame * 1000) / header.sampleRate)
+              let avgBitrate = header.bitrateKbps
+              if ((flags & 0x02) !== 0 && xingOffset + 16 <= data.length && durationMs > 0) {
+                const totalBytes = data.readUInt32BE(xingOffset + 12)
+                if (totalBytes > 0) avgBitrate = Math.round((totalBytes * 8) / durationMs)
+              }
+              return {
+                durationMs,
+                sampleRate: header.sampleRate,
+                channels: header.channels,
+                bitrateKbps: avgBitrate,
+                isVbr: tag === 'Xing',
+                frameCount: totalFrames,
+              }
+            }
+          }
+        }
+      }
+
+      const vbriOffset = offset + 36
+      if (vbriOffset + 18 <= offset + header.frameSize && vbriOffset + 18 <= data.length) {
+        const vbriTag = data.subarray(vbriOffset, vbriOffset + 4).toString('ascii')
+        if (vbriTag === 'VBRI') {
+          const totalBytes = data.readUInt32BE(vbriOffset + 10)
+          const totalFrames = data.readUInt32BE(vbriOffset + 14)
+          if (totalFrames > 0) {
+            const durationMs = Math.round((totalFrames * header.samplesPerFrame * 1000) / header.sampleRate)
+            const avgBitrate = totalBytes > 0 && durationMs > 0
+              ? Math.round((totalBytes * 8) / durationMs)
+              : header.bitrateKbps
+            return {
+              durationMs,
+              sampleRate: header.sampleRate,
+              channels: header.channels,
+              bitrateKbps: avgBitrate,
+              isVbr: true,
+              frameCount: totalFrames,
+            }
+          }
+        }
+      }
+    } else if (header.bitrateKbps !== firstBitrate) {
+      isVbr = true
+    }
+
+    frameCount += 1
+    totalDurationMs += (header.samplesPerFrame * 1000) / header.sampleRate
+    bitrateSum += header.bitrateKbps
+    offset += header.frameSize
+  }
+
+  if (frameCount === 0) {
+    return {
+      durationMs: Math.round((afterId3v2.length * 8) / 48),
+      sampleRate: 24000,
+      channels: 1,
+      bitrateKbps: 48,
+      isVbr: false,
+      frameCount: 0,
+    }
+  }
+
+  return {
+    durationMs: Math.round(totalDurationMs),
+    sampleRate: firstSampleRate,
+    channels: firstChannels,
+    bitrateKbps: Math.round(bitrateSum / frameCount),
+    isVbr,
+    frameCount,
+  }
+}
+
+interface SilenceFrameSpec {
+  header: readonly [number, number, number, number]
+  frameSize: number
+  frameDurationMs: number
+}
+
+const SILENCE_SPECS: Record<number, SilenceFrameSpec> = {
+  24000: { header: [0xff, 0xf3, 0x64, 0xc0], frameSize: 144, frameDurationMs: (576 * 1000) / 24000 },
+  22050: { header: [0xff, 0xf3, 0x60, 0xc0], frameSize: 156, frameDurationMs: (576 * 1000) / 22050 },
+  16000: { header: [0xff, 0xf3, 0x68, 0xc0], frameSize: 216, frameDurationMs: (576 * 1000) / 16000 },
+  44100: { header: [0xff, 0xfb, 0x50, 0xc0], frameSize: 208, frameDurationMs: (1152 * 1000) / 44100 },
+  48000: { header: [0xff, 0xfb, 0x54, 0xc0], frameSize: 192, frameDurationMs: (1152 * 1000) / 48000 },
+  32000: { header: [0xff, 0xfb, 0x58, 0xc0], frameSize: 288, frameDurationMs: (1152 * 1000) / 32000 },
+}
+
+/**
+ * 生成匹配目标采样率的合法单声道静音 MP3 帧（默认 24000Hz MPEG-2 48kbps 144B/24ms）。
+ */
+export function createSilenceMp3(durationMs: number, sampleRate = 24000): Buffer {
   if (!Number.isFinite(durationMs) || durationMs <= 0) return Buffer.alloc(0)
-  const frames = Math.max(1, Math.round(durationMs / 24))
-  const frameSize = 144
-  const out = Buffer.alloc(frames * frameSize)
+  const spec = SILENCE_SPECS[sampleRate] ?? SILENCE_SPECS[24000]
+  const frames = Math.max(1, Math.round(durationMs / spec.frameDurationMs))
+  const out = Buffer.alloc(frames * spec.frameSize)
   for (let i = 0; i < frames; i++) {
-    const offset = i * frameSize
-    out[offset] = 0xff
-    out[offset + 1] = 0xf3
-    out[offset + 2] = 0x64
-    out[offset + 3] = 0xc0
+    const offset = i * spec.frameSize
+    out[offset] = spec.header[0]
+    out[offset + 1] = spec.header[1]
+    out[offset + 2] = spec.header[2]
+    out[offset + 3] = spec.header[3]
   }
   return out
 }
@@ -165,10 +367,10 @@ export function concatMp3Buffers(buffers: Buffer[]): Buffer {
 }
 
 /**
- * 按 48kbps（6 字节/毫秒）估算 MP3 音频时长（毫秒）。
+ * 精确计算 MP3 音频时长（毫秒）；非真实 MP3 帧的占位缓冲回退按 48kbps 估算。
  */
 export function estimateMp3DurationMs(mp3: Buffer): number {
-  return Math.round((stripId3v2(mp3).length * 8) / 48)
+  return inspectMp3Buffer(mp3).durationMs
 }
 
 /**
@@ -331,16 +533,127 @@ export function renderPreviewHtml(
   ].join('\n') + '\n'
 }
 
+/**
+ * 清洗并解析时间戳字符串（支持 HH:MM:SS,mmm / HH:MM:SS.mmm / MM:SS.mmm）。
+ */
+function parseSubtitleTimestampMs(raw: string): number | null {
+  const match = /^(?:(\d{1,3}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})$/.exec(raw.trim())
+  if (!match) return null
+  const hours = match[1] !== undefined ? Number(match[1]) : 0
+  const minutes = Number(match[2])
+  const seconds = Number(match[3])
+  const millis = Number(match[4].padEnd(3, '0'))
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || !Number.isFinite(seconds) || !Number.isFinite(millis)) {
+    return null
+  }
+  return ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis
+}
+
+function stripInlineSubtitleTags(text: string): string {
+  return text
+    .replace(/<\/?(?:v|c|b|i|u|ruby|rt|lang|font)(?=[\s.>/]|$)[^>]*>/gi, '')
+    .replace(/<\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3}>/g, '')
+}
+
+/**
+ * 解析 SRT 或 WebVTT 字幕文件为按开始时间排序的 SubtitleCue 数组（1-based 索引）。
+ */
+export function parseSubtitleFile(content: string): SubtitleCue[] {
+  const normalized = content.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim()
+  if (normalized === '') return []
+
+  const blocks = normalized.split(/\n{2,}/)
+  const parsed: Array<{ startMs: number; endMs: number; text: string }> = []
+
+  for (const block of blocks) {
+    const lines = block.split('\n').map((line) => line.trimEnd())
+    const firstNonEmpty = lines.find((line) => line.trim() !== '')?.trim() ?? ''
+    if (
+      firstNonEmpty === ''
+      || firstNonEmpty.startsWith('WEBVTT')
+      || firstNonEmpty.startsWith('NOTE')
+      || firstNonEmpty === 'STYLE'
+      || firstNonEmpty === 'REGION'
+    ) {
+      continue
+    }
+
+    const timingIdx = lines.findIndex((line) => line.includes('-->'))
+    if (timingIdx === -1) continue
+
+    const timingLine = lines[timingIdx]
+    const arrowPos = timingLine.indexOf('-->')
+    const leftPart = timingLine.slice(0, arrowPos).trim()
+    const rightPart = timingLine.slice(arrowPos + 3).trim()
+    const startToken = leftPart.split(/\s+/).pop() ?? ''
+    const endToken = rightPart.split(/\s+/)[0] ?? ''
+
+    const startMs = parseSubtitleTimestampMs(startToken)
+    const endMsRaw = parseSubtitleTimestampMs(endToken)
+    if (startMs === null || endMsRaw === null) continue
+
+    const endMs = Math.max(startMs, endMsRaw)
+    const text = stripInlineSubtitleTags(lines.slice(timingIdx + 1).join('\n')).trim()
+    if (text === '') continue
+
+    parsed.push({ startMs, endMs, text })
+  }
+
+  parsed.sort((a, b) => (a.startMs !== b.startMs ? a.startMs - b.startMs : a.endMs - b.endMs))
+  return parsed.map((cue, idx) => ({
+    index: idx + 1,
+    startMs: cue.startMs,
+    endMs: cue.endMs,
+    text: cue.text,
+  }))
+}
+
+/**
+ * 将基础语速百分比（如 `+10%`）乘以缩放因子并钳制在 `[0.7, 1.85]`（`-30%` 至 `+85%`），返回 `'+25%'` / `'-10%'` 格式。
+ */
+export function scaleRatePercent(baseRate: string, factor: number): string {
+  const match = /^([+-]?\d+(?:\.\d+)?)%$/.exec(baseRate.trim())
+  const baseMultiplier = match && Number.isFinite(Number(match[1])) ? 1 + Number(match[1]) / 100 : 1.0
+  const safeFactor = Number.isFinite(factor) && factor > 0 ? factor : 1.0
+  const combined = Math.min(1.85, Math.max(0.7, baseMultiplier * safeFactor))
+  const percent = Math.round((combined - 1) * 100)
+  return (percent >= 0 ? '+' : '') + String(percent) + '%'
+}
+
+/**
+ * 纯文本单遍发音词典替换（用于不支持 SSML `<sub alias>` 的 OpenAI / SiliconFlow 引擎）。
+ * 按原词长度降序构造单次正则同步替换，保证替读结果不会递归触发其它规则。
+ */
+export function applyPronunciationsPlain(
+  text: string,
+  rules: ReadonlyArray<{ word: string; alias: string }>,
+): string {
+  if (text === '' || !Array.isArray(rules) || rules.length === 0) return text
+  const map = new Map<string, string>()
+  for (const rule of rules) {
+    if (!rule || typeof rule.word !== 'string' || typeof rule.alias !== 'string') continue
+    const word = rule.word.trim()
+    const alias = rule.alias.trim()
+    if (word !== '' && alias !== '') {
+      map.set(word, alias)
+    }
+  }
+  if (map.size === 0) return text
+  const sortedWords = Array.from(map.keys()).sort((a, b) => b.length - a.length)
+  const regex = new RegExp(sortedWords.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g')
+  return text.replace(regex, (matched) => map.get(matched) ?? matched)
+}
+
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) throw signal.reason
 }
 
-function runFfmpegLoudnorm(inPath: string, outPath: string, signal?: AbortSignal): Promise<void> {
+function runFfmpegArgs(args: string[], errorPrefix: string, signal?: AbortSignal): Promise<void> {
   throwIfAborted(signal)
   return new Promise<void>((resolvePromise, rejectPromise) => {
     execFile(
       'ffmpeg',
-      ['-y', '-i', inPath, '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', '-ar', '24000', '-ac', '1', '-b:a', '48k', outPath],
+      args,
       { signal, maxBuffer: 4 * 1024 * 1024 },
       (error, _stdout, stderr) => {
         if (signal?.aborted === true) {
@@ -351,7 +664,7 @@ function runFfmpegLoudnorm(inPath: string, outPath: string, signal?: AbortSignal
           const detail = typeof stderr === 'string' && stderr.trim() !== ''
             ? stderr.trim().slice(-300)
             : error.message
-          rejectPromise(new Error('ffmpeg 响度均衡失败：' + detail))
+          rejectPromise(new Error(errorPrefix + detail))
           return
         }
         resolvePromise()
@@ -371,13 +684,93 @@ export async function normalizeAudioLoudness(mp3: Buffer, signal?: AbortSignal):
     const inPath = join(tempDir, 'in.mp3')
     const outPath = join(tempDir, 'out.mp3')
     writeFileSync(inPath, mp3)
-    await runFfmpegLoudnorm(inPath, outPath, signal)
+    await runFfmpegArgs(
+      ['-y', '-i', inPath, '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', '-ar', '24000', '-ac', '1', '-b:a', '48k', outPath],
+      'ffmpeg 响度均衡失败：',
+      signal,
+    )
     throwIfAborted(signal)
     const normalized = readFileSync(outPath)
     if (normalized.length === 0) {
       throw new Error('ffmpeg 响度均衡结果为空。')
     }
     return normalized
+  } finally {
+    try {
+      rmSync(tempDir, { recursive: true, force: true })
+    } catch {
+      // 尽力清理临时目录
+    }
+  }
+}
+
+/** 播客 BGM 混音与自动闪避选项。 */
+export interface BgmMixOptions {
+  bgmPath: string
+  bgmVolume?: number
+  ducking?: boolean
+  normalizeLoudness?: boolean
+}
+
+/**
+ * 使用本地 ffmpeg 将人声 MP3 与背景音乐混音：
+ * 自动循环 BGM、按人声侧链压缩闪避（ducking）、在结尾 1.2s 平滑淡出（总长 > 3s），并可选联动响度均衡。
+ */
+export async function mixAudioWithBgm(voiceMp3: Buffer, opts: BgmMixOptions, signal?: AbortSignal): Promise<Buffer> {
+  throwIfAborted(signal)
+  if (voiceMp3.length === 0) {
+    throw new Error('人声音频为空，无法混入 BGM。')
+  }
+  if (typeof opts.bgmPath !== 'string' || opts.bgmPath.trim() === '') {
+    throw new Error('未提供有效的背景音乐路径（bgmPath）。')
+  }
+
+  const info = inspectMp3Buffer(voiceMp3)
+  const targetRate = [16000, 22050, 24000, 32000, 44100, 48000].includes(info.sampleRate) ? info.sampleRate : 24000
+  const targetLayout = info.channels === 2 ? 'stereo' : 'mono'
+  const volume = Math.min(1.0, Math.max(0.02, Number.isFinite(opts.bgmVolume) ? (opts.bgmVolume as number) : 0.18))
+  const ducking = opts.ducking !== false
+  const fadeFilter = info.durationMs > 3000
+    ? `,afade=t=out:st=${Math.max(0, (info.durationMs - 1200) / 1000).toFixed(3)}:d=1.2`
+    : ''
+  const loudnormFilter = opts.normalizeLoudness === true ? ',loudnorm=I=-16:TP=-1.5:LRA=11' : ''
+  const bitrateArg = String(Math.min(192, Math.max(48, info.bitrateKbps))) + 'k'
+
+  const filterGraph = ducking
+    ? `[0:a]aformat=sample_rates=${targetRate}:channel_layouts=${targetLayout},asplit=2[v_mix][v_sc];`
+      + `[1:a]aformat=sample_rates=${targetRate}:channel_layouts=${targetLayout},volume=${volume.toFixed(4)}${fadeFilter}[bgm];`
+      + `[bgm][v_sc]sidechaincompress=threshold=0.03:ratio=6:attack=40:release=450[bgm_ducked];`
+      + `[v_mix][bgm_ducked]amix=inputs=2:duration=first:dropout_transition=2:normalize=0${loudnormFilter}[out]`
+    : `[0:a]aformat=sample_rates=${targetRate}:channel_layouts=${targetLayout}[v_mix];`
+      + `[1:a]aformat=sample_rates=${targetRate}:channel_layouts=${targetLayout},volume=${volume.toFixed(4)}${fadeFilter}[bgm];`
+      + `[v_mix][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0${loudnormFilter}[out]`
+
+  const tempDir = mkdtempSync(join(tmpdir(), 'dsh-voice-bgm-'))
+  try {
+    const voicePath = join(tempDir, 'voice.mp3')
+    const outPath = join(tempDir, 'out.mp3')
+    writeFileSync(voicePath, voiceMp3)
+    await runFfmpegArgs(
+      [
+        '-y',
+        '-i', voicePath,
+        '-stream_loop', '-1', '-i', opts.bgmPath,
+        '-filter_complex', filterGraph,
+        '-map', '[out]',
+        '-ar', String(targetRate),
+        '-ac', String(info.channels),
+        '-b:a', bitrateArg,
+        outPath,
+      ],
+      'ffmpeg BGM 混音失败：',
+      signal,
+    )
+    throwIfAborted(signal)
+    const mixed = readFileSync(outPath)
+    if (mixed.length === 0) {
+      throw new Error('ffmpeg BGM 混音结果为空。')
+    }
+    return mixed
   } finally {
     try {
       rmSync(tempDir, { recursive: true, force: true })
