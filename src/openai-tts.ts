@@ -4,12 +4,20 @@
  * @module dsh-voice/openai-tts
  */
 
+/** 零样本克隆参考音频样本。 */
+export interface ReferenceVoiceSample {
+  audioDataUri: string
+  text?: string
+}
+
 /** OpenAI 兼容 TTS 合成选项。 */
 export interface OpenAiTtsOptions {
   text: string
   voice: string
   model: string
   speed?: number
+  instructions?: string
+  references?: ReferenceVoiceSample[]
   signal?: AbortSignal
 }
 
@@ -79,6 +87,11 @@ export async function synthesizeOpenAiSpeech(
     throw new Error('未配置 TTS 密钥：请在 DSH「设置 → 插件 → 语音」填写 ttsApiKey 或设置环境变量 DSH_VOICE_TTS_KEY。')
   }
 
+  const hasReferences = Array.isArray(options.references) && options.references.length > 0
+  if (options.voice.trim() === '' && !hasReferences) {
+    throw new Error('未指定音色：请填写 voice 或提供参考音频 references。')
+  }
+
   const headers: Record<string, string> = {
     'content-type': 'application/json',
   }
@@ -86,12 +99,29 @@ export async function synthesizeOpenAiSpeech(
     headers.authorization = 'Bearer ' + key
   }
 
-  const payload = {
-    model: options.model || 'gpt-4o-mini-tts',
-    input: options.text,
+  const effectiveModel = options.model || 'gpt-4o-mini-tts'
+  const isCosyVoice = effectiveModel.toLowerCase().includes('cosyvoice')
+  const instr = options.instructions?.trim() ?? ''
+  let input = options.text
+  if (instr !== '' && isCosyVoice && !options.text.includes('<|endofprompt|>')) {
+    input = instr + '<|endofprompt|>' + options.text
+  }
+
+  const payload: Record<string, unknown> = {
+    model: effectiveModel,
+    input,
     voice: options.voice,
     response_format: 'mp3',
     ...(options.speed !== undefined && options.speed !== 1 ? { speed: options.speed } : {}),
+    ...(instr !== '' && !isCosyVoice ? { instructions: instr } : {}),
+    ...(hasReferences
+      ? {
+          references: options.references!.map((ref) => ({
+            audio: ref.audioDataUri,
+            text: ref.text ?? '',
+          })),
+        }
+      : {}),
   }
 
   const timeoutSignal = AbortSignal.timeout(timeoutMs)

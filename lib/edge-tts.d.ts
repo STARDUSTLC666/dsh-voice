@@ -1,3 +1,4 @@
+import { type VoiceInfo } from './voices.js';
 /** 重置时钟偏差缓存（测试专用）。 */
 export declare function resetClockSkewForTest(): void;
 /** 读取当前时钟偏差（秒）。 */
@@ -65,3 +66,17 @@ export declare function synthesizeSpeechWithMetadata(options: TtsOptions & {
  * @throws 文本为空/超长 / 连接失败 / 超时 / 无音频数据时抛中文错误。
  */
 export declare function synthesizeSpeech(options: TtsOptions, deps?: TtsDeps, timeoutMs?: number, signal?: AbortSignal): Promise<Buffer>;
+/** 在线音色列表拉取的可注入依赖。 */
+export interface FetchEdgeVoicesDeps {
+    fetchImpl?: typeof fetch;
+    nowSeconds?: () => number;
+    signal?: AbortSignal;
+    forceRefresh?: boolean;
+}
+/** 重置 Edge 在线音色内存缓存（测试专用）。 */
+export declare function resetEdgeVoicesCacheForTest(): void;
+/**
+ * 动态拉取微软 Edge 在线全量（300+）音色目录并缓存 24 小时。
+ * @throws 请求失败 / 重定向 / 响应异常 / 超时时抛中文错误。
+ */
+export declare function fetchEdgeVoices(deps?: FetchEdgeVoicesDeps, timeoutMs?: number): Promise<VoiceInfo[]>;

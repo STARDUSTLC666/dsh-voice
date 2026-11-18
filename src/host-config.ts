@@ -8,7 +8,7 @@
  *
  * @module dsh-voice/host-config
  */
-import type { AsrEngine, TtsEngine, VoiceConfig } from './config.js'
+import type { AsrEngine, CustomVoiceAlias, TtsEngine, VoiceConfig } from './config.js'
 
 const kSchema = Symbol.for('schemastery')
 const kValidationError = Symbol.for('ValidationError')
@@ -524,6 +524,17 @@ export const Config: HostSchemaNode<VoiceConfig> = z.object<VoiceConfig>({
     .description('单次合成或转写超时毫秒数（5000–600000，默认 60000）'),
   overwrite: z.boolean().volatile()
     .description('同名输出文件是否直接覆盖（默认关闭，自动加序号防误盖）'),
+  customVoices: z.array(z.object<CustomVoiceAlias>({
+    name: z.string().required().description('自定义音色别名（如 老王、女主持、悬疑旁白）'),
+    voice: z.string().description('底层音色 ID 或混合表达式（可选，如 zh-CN-YunzeNeural、FunAudioLLM/CosyVoice2-0.5B:alex、zf_xiaobei*0.6+zf_xiaoni*0.4）'),
+    persona: z.string().description('继承的内置人设 ID（可选，如 late-night-radio）'),
+    rate: z.string().description('专属语速（可选，如 -8%、+10%）'),
+    pitch: z.string().description('专属音调（可选，如 -2Hz、+2Hz）'),
+    instructions: z.string().description('情绪/语气指令（可选，用于 gpt-4o-mini-tts 或 CosyVoice2，如“用低沉神秘的语气轻声讲述”）'),
+    referenceAudio: z.string().description('零样本克隆参考音频路径（可选，会话工作区内 5–10 秒干净人声 wav/mp3）'),
+    referenceText: z.string().description('参考音频对应的原始台词文本（可选，CosyVoice2 等克隆模型推荐填写）'),
+  })).collapse().volatile()
+    .description('自定义音色与零样本克隆别名列表（保存后立即生效）'),
 }).i18n({
   zh: {
     $description: '零密钥 Edge / OpenAI 兼容语音合成（TTS）与语音转文字（ASR）设置（保存立即生效）',
@@ -541,6 +552,7 @@ export const Config: HostSchemaNode<VoiceConfig> = z.object<VoiceConfig>({
     proxyUrl: '网络代理地址（可选，支持 http(s):// 或 socks5(h)://，如 http://127.0.0.1:7890）',
     timeoutMs: '请求超时毫秒数（5000–600000，默认 60000）',
     overwrite: '允许覆盖同名音频或转写文本（默认关闭，自动追加序号）',
+    customVoices: '自定义音色与零样本克隆别名列表（可为常用音色、人设或参考音频命名，保存后立即生效）',
   },
   en: {
     $description: 'Keyless Edge / OpenAI-compatible TTS read-aloud and ASR transcription settings (live on save)',
@@ -558,6 +570,7 @@ export const Config: HostSchemaNode<VoiceConfig> = z.object<VoiceConfig>({
     proxyUrl: 'Optional proxy URL (supports http(s):// or socks5(h)://, e.g. http://127.0.0.1:7890)',
     timeoutMs: 'Per-request timeout in ms (5000–600000, default 60000)',
     overwrite: 'Overwrite existing output files instead of auto-numbering (default off)',
+    customVoices: 'Custom voice and zero-shot cloning aliases (name reusable voices, personas, or reference audio clips; live on save)',
   },
 })
 

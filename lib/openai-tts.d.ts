@@ -3,12 +3,19 @@
  *
  * @module dsh-voice/openai-tts
  */
+/** 零样本克隆参考音频样本。 */
+export interface ReferenceVoiceSample {
+    audioDataUri: string;
+    text?: string;
+}
 /** OpenAI 兼容 TTS 合成选项。 */
 export interface OpenAiTtsOptions {
     text: string;
     voice: string;
     model: string;
     speed?: number;
+    instructions?: string;
+    references?: ReferenceVoiceSample[];
     signal?: AbortSignal;
 }
 /**

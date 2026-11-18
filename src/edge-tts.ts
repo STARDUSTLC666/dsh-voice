@@ -9,9 +9,12 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 import { edgeTokenV2 } from './edge-drm-v2.js'
 import { getProxyWsAgent } from './proxy-fetch.js'
+import { VOICES, type VoiceInfo } from './voices.js'
 
 const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4'
 const WS_BASE = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1'
+const VOICES_LIST_URL = 'https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list'
+const EDGE_VOICES_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const OUTPUT_FORMAT = 'audio-24khz-48kbitrate-mono-mp3'
 const SEC_MS_GEC_VERSION = '2-143.0.3650.75'
 const WIN_EPOCH_SECONDS = 11644473600
@@ -377,4 +380,161 @@ export async function synthesizeSpeechWithMetadata(
 export async function synthesizeSpeech(options: TtsOptions, deps: TtsDeps = {}, timeoutMs = 30000, signal?: AbortSignal): Promise<Buffer> {
   const result = await synthesizeSpeechWithMetadata(options, deps, timeoutMs, signal)
   return result.audio
+}
+
+/** 在线音色列表拉取的可注入依赖。 */
+export interface FetchEdgeVoicesDeps {
+  fetchImpl?: typeof fetch
+  nowSeconds?: () => number
+  signal?: AbortSignal
+  forceRefresh?: boolean
+}
+
+interface RawEdgeVoiceItem {
+  ShortName?: unknown
+  Gender?: unknown
+  Locale?: unknown
+  FriendlyName?: unknown
+  VoiceTag?: {
+    ContentCategories?: unknown
+    VoicePersonalities?: unknown
+  }
+}
+
+let cachedEdgeVoices: { voices: VoiceInfo[]; fetchedAtMs: number } | undefined
+
+/** 重置 Edge 在线音色内存缓存（测试专用）。 */
+export function resetEdgeVoicesCacheForTest(): void {
+  cachedEdgeVoices = undefined
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) throw signal.reason
+}
+
+function raceAbortSignal<T>(value: T | PromiseLike<T>, signal: AbortSignal | undefined): Promise<T> {
+  const promise = Promise.resolve(value)
+  if (signal === undefined || typeof signal.addEventListener !== 'function') return promise
+  if (signal.aborted === true) return Promise.reject(signal.reason)
+  return new Promise<T>((resolvePromise, rejectPromise) => {
+    const onAbort = () => rejectPromise(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (settled) => { signal.removeEventListener('abort', onAbort); resolvePromise(settled) },
+      (error) => { signal.removeEventListener('abort', onAbort); rejectPromise(error) },
+    )
+  })
+}
+
+function collectLowercaseTags(builtinTags: readonly string[] | undefined, voiceTag: RawEdgeVoiceItem['VoiceTag']): string[] {
+  const tagSet = new Set<string>()
+  const pushAll = (items: unknown) => {
+    if (!Array.isArray(items)) return
+    for (const item of items) {
+      if (typeof item !== 'string') continue
+      const normalized = item.trim().toLowerCase()
+      if (normalized !== '') tagSet.add(normalized)
+    }
+  }
+  pushAll(builtinTags)
+  pushAll(voiceTag?.ContentCategories)
+  pushAll(voiceTag?.VoicePersonalities)
+  return Array.from(tagSet)
+}
+
+/**
+ * 动态拉取微软 Edge 在线全量（300+）音色目录并缓存 24 小时。
+ * @throws 请求失败 / 重定向 / 响应异常 / 超时时抛中文错误。
+ */
+export async function fetchEdgeVoices(deps: FetchEdgeVoicesDeps = {}, timeoutMs = 15000): Promise<VoiceInfo[]> {
+  throwIfAborted(deps.signal)
+
+  if (
+    deps.forceRefresh !== true
+    && cachedEdgeVoices !== undefined
+    && Date.now() - cachedEdgeVoices.fetchedAtMs < EDGE_VOICES_CACHE_TTL_MS
+  ) {
+    return cachedEdgeVoices.voices
+  }
+
+  const nowSec = deps.nowSeconds ? deps.nowSeconds() : Date.now() / 1000 + clockSkewSeconds
+  const token = generateSecMsGec(nowSec)
+  const url = `${VOICES_LIST_URL}?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${token}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`
+  const fetchImpl = deps.fetchImpl ?? globalThis.fetch
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  const requestSignal = deps.signal === undefined ? timeoutSignal : AbortSignal.any([timeoutSignal, deps.signal])
+
+  let response: Response
+  try {
+    response = await raceAbortSignal(
+      fetchImpl(url, {
+        method: 'GET',
+        redirect: 'manual',
+        headers: {
+          'User-Agent': WSS_HEADERS['User-Agent'],
+          Accept: 'application/json',
+          'Sec-MS-GEC': token,
+          'Sec-MS-GEC-Version': SEC_MS_GEC_VERSION,
+        },
+        signal: requestSignal,
+      }),
+      requestSignal,
+    )
+  } catch (error) {
+    throwIfAborted(deps.signal)
+    if (timeoutSignal.aborted) throw new Error('拉取 Edge 在线音色列表超时，请重试或检查网络。')
+    throw new Error('拉取 Edge 在线音色列表失败：' + (error instanceof Error ? error.message : String(error)))
+  }
+
+  if (response.status >= 300 && response.status < 400) {
+    try { await raceAbortSignal(response.body?.cancel(), requestSignal) } catch { /* 忽略 */ }
+    throwIfAborted(deps.signal)
+    throw new Error('Edge 在线音色列表返回重定向（HTTP ' + response.status + '），已阻止跳转。')
+  }
+
+  if (!response.ok) {
+    try { await raceAbortSignal(response.body?.cancel(), requestSignal) } catch { /* 忽略 */ }
+    throwIfAborted(deps.signal)
+    throw new Error('拉取 Edge 在线音色列表失败：HTTP ' + response.status + '。')
+  }
+
+  let rawList: unknown
+  try {
+    rawList = await raceAbortSignal(response.json(), requestSignal)
+  } catch (error) {
+    throwIfAborted(deps.signal)
+    if (timeoutSignal.aborted) throw new Error('拉取 Edge 在线音色列表超时，请重试或检查网络。')
+    throw new Error('Edge 在线音色列表响应不是合法 JSON：' + (error instanceof Error ? error.message : String(error)))
+  }
+
+  if (!Array.isArray(rawList) || rawList.length === 0) {
+    throw new Error('Edge 在线音色列表为空或格式异常。')
+  }
+
+  const builtinById = new Map(VOICES.map((voice) => [voice.id, voice]))
+  const mapped: VoiceInfo[] = []
+  for (const entry of rawList) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const item = entry as RawEdgeVoiceItem
+    if (typeof item.ShortName !== 'string' || item.ShortName.trim() === '') continue
+
+    const id = item.ShortName.trim()
+    const gender: 'Female' | 'Male' = item.Gender === 'Male' ? 'Male' : 'Female'
+    const builtin = builtinById.get(id)
+    const localeRaw = typeof item.Locale === 'string' && item.Locale.trim() !== ''
+      ? item.Locale.trim()
+      : id.split('-').slice(0, 2).join('-')
+    const friendlyRaw = typeof item.FriendlyName === 'string' ? item.FriendlyName.trim() : ''
+    const locale = builtin !== undefined ? builtin.locale : `${localeRaw}（${friendlyRaw || id}）`
+    const tags = collectLowercaseTags(builtin?.tags, item.VoiceTag)
+
+    mapped.push({ id, gender, locale, tags })
+  }
+
+  if (mapped.length === 0) {
+    throw new Error('Edge 在线音色列表为空或格式异常。')
+  }
+
+  cachedEdgeVoices = { voices: mapped, fetchedAtMs: Date.now() }
+  return mapped
 }

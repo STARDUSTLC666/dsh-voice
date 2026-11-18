@@ -1,8 +1,3 @@
-/**
- * TTS 文本预处理、长文智能分段、MP3 帧拼接/静音生成、字幕格式化与试听卡片 HTML 渲染。
- *
- * @module dsh-voice/tts-text
- */
 import type { SubtitleCue } from './edge-tts.js';
 /**
  * 清洗 Markdown 为适合语音朗读的纯文本：
@@ -46,3 +41,8 @@ export declare function renderPreviewHtml(samples: Array<{
     locale?: string;
     gender?: string;
 }>, text: string): string;
+/**
+ * 使用本地 ffmpeg 对 MP3 音频执行播客级响度均衡（-16 LUFS / TP -1.5 dBTP / LRA 11）。
+ * @throws 取消时抛出 signal.reason，ffmpeg 失败时抛中文错误。
+ */
+export declare function normalizeAudioLoudness(mp3: Buffer, signal?: AbortSignal): Promise<Buffer>;

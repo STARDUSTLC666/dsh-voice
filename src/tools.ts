@@ -5,8 +5,8 @@
  */
 import { openAsBlob, readFileSync, statSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import { isLoopbackBaseUrl, isValidProsody, type ResolvedVoiceConfig } from './config.js'
-import { synthesizeSpeech, synthesizeSpeechWithMetadata, type SubtitleCue } from './edge-tts.js'
+import { isLoopbackBaseUrl, isValidProsody, resolveCustomVoice, type CustomVoiceAlias, type ResolvedVoiceConfig } from './config.js'
+import { fetchEdgeVoices, synthesizeSpeech, synthesizeSpeechWithMetadata, type SubtitleCue } from './edge-tts.js'
 import { rateToSpeed, synthesizeOpenAiSpeech } from './openai-tts.js'
 import { assertAudioFile, assertWorkspaceFile, ensureWorkspaceDirectory, resolveOutputPath, writeWorkspaceFile } from './paths.js'
 import { createProxyFetch } from './proxy-fetch.js'
@@ -17,11 +17,12 @@ import {
   createSilenceMp3,
   estimateMp3DurationMs,
   formatSubtitles,
+  normalizeAudioLoudness,
   offsetCues,
   renderPreviewHtml,
   splitTextIntoChunks,
 } from './tts-text.js'
-import { filterVoices, isValidVoiceId, VOICES } from './voices.js'
+import { filterVoices, isValidVoiceId, resolvePersona, VOICE_PERSONAS, VOICES } from './voices.js'
 
 /** 模型可见的内容块。 */
 export interface ContentBlock {
@@ -161,7 +162,14 @@ const voiceItemSchema = {
 
 const listSchema = {
   type: 'object',
-  properties: { count: { type: 'integer' }, voices: { type: 'array', items: voiceItemSchema } },
+  properties: {
+    count: { type: 'integer' },
+    voices: { type: 'array', items: voiceItemSchema },
+    source: { type: 'string' },
+    personas: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    customVoices: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    fallbackReason: { type: 'string' },
+  },
   additionalProperties: true,
 }
 
@@ -220,6 +228,9 @@ const FALLBACK_TTS_MODEL = 'gpt-4o-mini-tts'
 /** ASR 直传上限（25MB）。 */
 const MAX_ASR_BYTES = 25 * 1024 * 1024
 
+/** 零样本克隆参考音频上限（10MB）。 */
+const MAX_REFERENCE_AUDIO_BYTES = 10 * 1024 * 1024
+
 /** 默认试听文本（中英混合，便于感知发音差异）。 */
 export const DEFAULT_PREVIEW_TEXT = '你好，这是音色试听。Hello, this is a voice preview.'
 
@@ -237,12 +248,41 @@ interface PreviewOutcome {
   error?: string
 }
 
+interface VoiceReference {
+  audioDataUri: string
+  text?: string
+}
+
+interface EffectiveVoiceInput {
+  voice?: string
+  persona?: string
+  rate?: string
+  pitch?: string
+  pauseMs?: number
+  instructions?: string
+  referenceAudio?: string
+  referenceText?: string
+}
+
+interface EffectiveVoiceSpec {
+  voice: string
+  rate: string
+  pitch: string
+  pauseMs: number
+  instructions?: string
+  references?: VoiceReference[]
+  hasReferenceAudio: boolean
+}
+
 interface ParsedSegment {
   chunks: string[]
   voice: string
   rate: string
   pitch: string
   pauseMs: number
+  useEdge: boolean
+  instructions?: string
+  references?: VoiceReference[]
 }
 
 interface ChunkSynthesisResult {
@@ -257,6 +297,8 @@ export interface VoiceToolDeps {
   openaiTts?: typeof synthesizeOpenAiSpeech
   stt?: typeof transcribe
   prepareAudio?: typeof prepareAudioForAsr
+  fetchVoices?: typeof fetchEdgeVoices
+  normalizeAudio?: typeof normalizeAudioLoudness
 }
 
 /**
@@ -293,14 +335,124 @@ export function buildVoiceTools(
     }
   }
 
-  const assertTtsVoice = (voice: string, useEdge: boolean) => {
+  const assertTtsVoice = (voice: string, useEdge: boolean, hasReferences = false) => {
     if (useEdge) {
       if (!isValidVoiceId(voice)) {
         throw new Error('音色 id 不合法：' + voice + '。请用 voice_list 查看常用音色，或在 DSH「设置 → 插件 → 语音」修改 ttsVoice（合法格式如 zh-CN-XiaoxiaoNeural）。')
       }
       return
     }
-    if (voice.trim() === '') throw new Error('音色 id 不合法：不能为空。')
+    if (voice.trim() === '' && !hasReferences) throw new Error('音色 id 不合法：不能为空。')
+  }
+
+  const resolveUseEdge = (cfg: ResolvedVoiceConfig, hasReferenceAudio: boolean): boolean => {
+    if (deps.tts !== undefined || deps.ttsWithMeta !== undefined) return true
+    if (deps.openaiTts !== undefined && (cfg.ttsEngine !== 'edge' || hasReferenceAudio)) return false
+    return cfg.ttsEngine === 'edge'
+  }
+
+  const resolveEffectiveVoiceSpec = (
+    cfg: ResolvedVoiceConfig,
+    cwd: string,
+    input: EffectiveVoiceInput,
+  ): EffectiveVoiceSpec => {
+    let customAlias: CustomVoiceAlias | undefined
+    let voiceConsumedAsAlias = false
+    let personaConsumedAsAlias = false
+
+    if (input.persona !== undefined) {
+      customAlias = resolveCustomVoice(cfg.customVoices, input.persona)
+      if (customAlias !== undefined) personaConsumedAsAlias = true
+    }
+    if (customAlias === undefined && input.voice !== undefined) {
+      customAlias = resolveCustomVoice(cfg.customVoices, input.voice)
+      if (customAlias !== undefined) voiceConsumedAsAlias = true
+    }
+
+    let defaultAlias: CustomVoiceAlias | undefined
+    if (input.voice === undefined && input.persona === undefined) {
+      defaultAlias = resolveCustomVoice(cfg.customVoices, cfg.ttsVoice)
+    }
+    const activeAlias = customAlias ?? defaultAlias
+
+    let voiceConsumedAsPersona = false
+    let personaSpec = !personaConsumedAsAlias && input.persona !== undefined
+      ? resolvePersona(input.persona)
+      : undefined
+    if (personaSpec === undefined && activeAlias?.persona !== undefined) {
+      personaSpec = resolvePersona(activeAlias.persona)
+    }
+    if (personaSpec === undefined && !voiceConsumedAsAlias && input.voice !== undefined && !isValidVoiceId(input.voice)) {
+      personaSpec = resolvePersona(input.voice)
+      if (personaSpec !== undefined) voiceConsumedAsPersona = true
+    }
+
+    let defaultPersona: ReturnType<typeof resolvePersona>
+    if (input.voice === undefined && input.persona === undefined && activeAlias === undefined && !isValidVoiceId(cfg.ttsVoice)) {
+      defaultPersona = resolvePersona(cfg.ttsVoice)
+    }
+    const activePersona = personaSpec ?? defaultPersona
+
+    const explicitRawVoice = !voiceConsumedAsAlias && !voiceConsumedAsPersona ? input.voice : undefined
+    const effectiveInstructions = input.instructions ?? activeAlias?.instructions
+    const effectiveReferenceAudio = input.referenceAudio ?? activeAlias?.referenceAudio
+    const effectiveReferenceText = input.referenceText ?? activeAlias?.referenceText
+
+    let references: VoiceReference[] | undefined
+    const hasReferenceAudio = effectiveReferenceAudio !== undefined && effectiveReferenceAudio.trim() !== ''
+    if (hasReferenceAudio) {
+      const refPath = assertAudioFile(effectiveReferenceAudio, cwd)
+      const size = statSync(refPath).size
+      if (size <= 0) {
+        throw new Error('参考音频文件为空，无法用于音色克隆：' + effectiveReferenceAudio)
+      }
+      if (size > MAX_REFERENCE_AUDIO_BYTES) {
+        throw new Error('参考音频超过 10MB 上限（当前 ' + size + ' 字节），请裁剪为 5–10 秒人声片段：' + effectiveReferenceAudio)
+      }
+      const buf = readFileSync(refPath)
+      if (buf.length === 0 || buf.length > MAX_REFERENCE_AUDIO_BYTES) {
+        throw new Error('参考音频大小异常（必须为 1 字节至 10MB）：' + effectiveReferenceAudio)
+      }
+      if (resolveUseEdge(cfg, true)) {
+        throw new Error('零样本参考音频克隆（referenceAudio）需要兼容克隆的 TTS 引擎：请在 DSH「设置 → 插件 → 语音」将 ttsEngine 切换为 siliconflow（CosyVoice2-0.5B）或 custom（如本地 GPT-SoVITS / IndexTTS）。')
+      }
+      references = [{
+        audioDataUri: 'data:' + mimeFromPath(refPath) + ';base64,' + buf.toString('base64'),
+        ...(effectiveReferenceText !== undefined && effectiveReferenceText.trim() !== '' ? { text: effectiveReferenceText.trim() } : {}),
+      }]
+    }
+
+    const effectiveVoice = references !== undefined && explicitRawVoice === undefined
+      ? (activeAlias?.voice ?? '')
+      : (explicitRawVoice ?? activeAlias?.voice ?? activePersona?.voice ?? cfg.ttsVoice)
+
+    const effectiveRate = input.rate ?? activeAlias?.rate ?? activePersona?.rate ?? cfg.ttsRate
+    const effectivePitch = input.pitch ?? activeAlias?.pitch ?? activePersona?.pitch ?? cfg.ttsPitch
+    const effectivePauseMs = input.pauseMs ?? activePersona?.pauseMs ?? 300
+
+    return {
+      voice: effectiveVoice,
+      rate: effectiveRate,
+      pitch: effectivePitch,
+      pauseMs: effectivePauseMs,
+      ...(effectiveInstructions !== undefined ? { instructions: effectiveInstructions } : {}),
+      ...(references !== undefined ? { references } : {}),
+      hasReferenceAudio,
+    }
+  }
+
+  const maybeNormalizeAudio = async (
+    shouldNormalize: boolean,
+    audio: Buffer,
+    signal: AbortSignal | undefined,
+  ): Promise<Buffer> => {
+    if (!shouldNormalize) return audio
+    if (deps.normalizeAudio === undefined && !hasFfmpeg()) {
+      throw new Error('开启 normalizeLoudness 需要本机安装 ffmpeg（或使用 dsh-ffmpeg）。')
+    }
+    const normalized = await raceAbort((deps.normalizeAudio ?? normalizeAudioLoudness)(audio, signal), signal)
+    throwIfAborted(signal)
+    return normalized
   }
 
   const synthesizeChunk = async (
@@ -312,6 +464,8 @@ export function buildVoiceTools(
     pitch: string,
     needSubtitles: boolean,
     signal: AbortSignal | undefined,
+    instructions?: string,
+    references?: VoiceReference[],
   ): Promise<ChunkSynthesisResult> => {
     if (useEdge) {
       if (!needSubtitles) {
@@ -350,6 +504,8 @@ export function buildVoiceTools(
           voice,
           model: cfg.ttsModel !== '' ? cfg.ttsModel : FALLBACK_TTS_MODEL,
           speed: rateToSpeed(rate),
+          ...(instructions !== undefined ? { instructions } : {}),
+          ...(references !== undefined && references.length > 0 ? { references } : {}),
           signal,
         },
         getProxyFetch(cfg.proxyUrl) ?? globalThis.fetch,
@@ -369,63 +525,145 @@ export function buildVoiceTools(
   const voiceList: VoiceToolDefinition = {
     name: 'voice_list',
     isConcurrencySafe: () => true,
-    description: '列出常用语音合成音色（edge-tts 微软神经语音，免费）。含普通话/方言/粤语/英/日/韩/法/德/俄/西及多语种音色，支持按 locale/gender/tag 筛选。voice_tts 的 voice 参数也接受清单外的合法 edge 音色 id。',
+    description: '列出语音合成音色与角色人设配方：默认返回内置 45+ 精选音色（涵盖童声、少年、成熟/纪录片、老年、多语种与方言），设 online=true 可实时拉取微软 Edge 全量 300+ 音色目录（失败自动回退）。同时返回内置角色人设配方（personas）与自定义音色别名（customVoices），支持按 locale/gender/tag 筛选。',
     parameters: compileParameters({
       locale: { type: 'string', description: '按语言/地区或名称关键字筛选（可选，如 zh-CN、en-US、粤语）。' },
       gender: { type: 'string', enum: ['Female', 'Male'], description: '按性别筛选（可选：Female 或 Male）。' },
-      tag: { type: 'string', description: '按场景标签筛选（可选，如 podcast、multilingual、news、dialect）。' },
+      tag: { type: 'string', description: '按场景标签筛选（可选，如 podcast、multilingual、news、dialect、child、teen、mature、elder、anime、cartoon）。' },
+      online: { type: 'boolean', description: '是否联网拉取微软 Edge 全量 300+ 实时音色目录（可选，默认 false 使用内置精选目录；联网失败自动回退内置目录）。' },
+      includePersonas: { type: 'boolean', description: '是否同时返回内置角色人设配方（personas）与自定义音色别名（默认 true）。' },
     }),
     output: {
       schema: listSchema,
       render: (_args, value) => {
         const rec = asRecord(value)
         const voices = Array.isArray(rec.voices) ? rec.voices : []
-        const lines = ['共 ' + voices.length + ' 个常用音色：']
+        const source = typeof rec.source === 'string' ? rec.source : 'builtin'
+        const fallbackReason = typeof rec.fallbackReason === 'string' ? rec.fallbackReason : ''
+        const header = source === 'edge-online'
+          ? '共 ' + voices.length + ' 个在线 Edge 音色：'
+          : source === 'builtin-fallback'
+            ? '在线目录拉取失败（' + fallbackReason + '），已回退内置目录，共 ' + voices.length + ' 个常用音色：'
+            : '共 ' + voices.length + ' 个常用音色：'
+        const lines = [header]
         for (const voice of voices) {
           const v = asRecord(voice)
           const tags = Array.isArray(v.tags) && v.tags.length > 0 ? ' [' + v.tags.join(', ') + ']' : ''
           lines.push('- ' + v.id + '（' + v.locale + '）' + tags)
         }
+        const personas = Array.isArray(rec.personas) ? rec.personas : []
+        if (personas.length > 0) {
+          const summary = personas.map((p) => {
+            const item = asRecord(p)
+            return String(item.id ?? '') + '（' + String(item.label ?? '') + '）'
+          }).join('、')
+          lines.push('', '可用人设配方（persona）：' + summary)
+        }
+        const customVoices = Array.isArray(rec.customVoices) ? rec.customVoices : []
+        if (customVoices.length > 0) {
+          const summary = customVoices.map((c) => {
+            const item = asRecord(c)
+            const extras = [
+              typeof item.persona === 'string' && item.persona !== '' ? 'persona=' + item.persona : '',
+              typeof item.voice === 'string' && item.voice !== '' ? 'voice=' + item.voice : '',
+              item.hasReferenceAudio === true ? '含参考音频' : '',
+            ].filter(Boolean).join(', ')
+            return String(item.name ?? '') + (extras !== '' ? '（' + extras + '）' : '')
+          }).join('、')
+          lines.push('自定义音色别名（customVoices）：' + summary)
+        }
         return [{ type: 'text', text: lines.join('\n') }]
       },
     },
-    async execute(rawArgs: unknown) {
+    async execute(rawArgs: unknown, exec?: unknown) {
+      const cfg = getCfg()
+      const signal = execSignal(exec)
+      throwIfAborted(signal)
       const args = asRecord(rawArgs)
       const locale = optionalString(args, 'locale')
       const gender = optionalString(args, 'gender')
       const tag = optionalString(args, 'tag')
       const hasFilter = locale !== undefined || gender !== undefined || tag !== undefined
-      const voices = hasFilter ? filterVoices({ locale, gender, tag }) : VOICES
-      return { count: voices.length, voices }
+
+      let sourceVoices = VOICES
+      let source: 'builtin' | 'edge-online' | 'builtin-fallback' = 'builtin'
+      let fallbackReason = ''
+
+      if (args.online === true) {
+        try {
+          const fetched = await raceAbort(
+            (deps.fetchVoices ?? fetchEdgeVoices)({ fetchImpl: getProxyFetch(cfg.proxyUrl) ?? globalThis.fetch, signal }, cfg.timeoutMs),
+            signal,
+          )
+          throwIfAborted(signal)
+          if (Array.isArray(fetched) && fetched.length > 0) {
+            sourceVoices = fetched
+            source = 'edge-online'
+          } else {
+            source = 'builtin-fallback'
+            fallbackReason = '在线音色目录返回为空'
+          }
+        } catch (error) {
+          throwIfAborted(signal)
+          source = 'builtin-fallback'
+          fallbackReason = error instanceof Error ? error.message : String(error)
+        }
+      }
+
+      const voices = hasFilter ? filterVoices({ locale, gender, tag }, sourceVoices) : sourceVoices
+      const personas = args.includePersonas === false ? [] : VOICE_PERSONAS
+      const customVoices = cfg.customVoices.map((c) => ({
+        name: c.name,
+        voice: c.voice ?? '',
+        persona: c.persona ?? '',
+        hasReferenceAudio: Boolean(c.referenceAudio),
+      }))
+      return {
+        count: voices.length,
+        voices,
+        source,
+        personas,
+        customVoices,
+        ...(fallbackReason !== '' ? { fallbackReason } : {}),
+      }
     },
   }
 
   const voiceTts: VoiceToolDefinition = {
     name: 'voice_tts',
     isConcurrencySafe: () => !getCfg().overwrite,
-    description: '文字转语音：默认调用 edge-tts（微软 Edge 朗读服务，免费）合成 MP3，也可在设置中切换 OpenAI/SiliconFlow/自定义 TTS 引擎。支持直接传 text（自动分段支持至 100000 字符）、读取工作区 inputFile（自动清理 Markdown）、多角色播客 segments 及导出 .srt/.vtt 字幕；输出默认 voice_output.mp3（同名自动加序号）。',
+    description: '文字转语音：默认调用 edge-tts（微软 Edge 朗读服务，免费）合成 MP3，也可在设置中切换 OpenAI/SiliconFlow/自定义 TTS 引擎。支持内置角色人设 persona、自然语言情绪指令 instructions、5–10 秒参考音频零样本克隆 referenceAudio、多角色播客 segments、读取工作区 inputFile（自动清理 Markdown）、长文自动分段（≤100000 字符）、导出 .srt/.vtt 字幕与 -16 LUFS 响度均衡 normalizeLoudness；输出默认 voice_output.mp3。',
     parameters: compileParameters({
       text: { type: 'string', description: '要合成的文本（若提供 inputFile 或 segments 则可选；支持长文本自动分段，≤100000 字符）。' },
       inputFile: { type: 'string', description: '工作区内文稿文件路径（可选，如 article.md；指定时直接从文件读取）。' },
       cleanMarkdown: { type: 'boolean', description: '是否清理 Markdown 语法以便朗读（可选；inputFile 为 .md/.markdown 时默认 true）。' },
       segments: {
         type: 'array',
-        description: '多角色对话/播客分段（可选，最多 50 段）：每段可独立指定 voice/text/rate/pitch/pauseMs。',
+        description: '多角色对话/播客分段（可选，最多 50 段）：每段可独立指定 voice/persona/text/rate/pitch/pauseMs/instructions/referenceAudio/referenceText。',
         items: {
           type: 'object',
           properties: {
             voice: { type: 'string' },
+            persona: { type: 'string' },
             text: { type: 'string' },
             rate: { type: 'string' },
             pitch: { type: 'string' },
             pauseMs: { type: 'number' },
+            instructions: { type: 'string' },
+            referenceAudio: { type: 'string' },
+            referenceText: { type: 'string' },
           },
           required: ['text'],
         },
       },
-      voice: { type: 'string', description: '音色 id（可选，默认配置的 ttsVoice）。' },
+      voice: { type: 'string', description: '音色 id 或自定义音色别名（可选，默认配置的 ttsVoice）。' },
+      persona: { type: 'string', description: '内置角色人设 ID/标签（如 late-night-radio、anime-boy）或自定义音色别名（可选）。' },
       rate: { type: 'string', description: '语速，如 +20% 或 -10%（可选）。' },
       pitch: { type: 'string', description: '音调，如 +2Hz 或 -1Hz（可选）。' },
+      instructions: { type: 'string', description: '自然语言情绪/语气指令（可选，OpenAI gpt-4o-mini-tts 与 SiliconFlow CosyVoice2 可用，如“用开心轻快的语气说”，支持 [laughter] / [breath]）。' },
+      referenceAudio: { type: 'string', description: '零样本克隆参考音频路径（可选，会话工作区内 5–10 秒干净人声，≤10MB；需 siliconflow 或 custom 引擎）。' },
+      referenceText: { type: 'string', description: '参考音频对应的原始台词文本（可选，零样本克隆推荐填写）。' },
+      normalizeLoudness: { type: 'boolean', default: false, description: '是否在合成后通过 ffmpeg 执行 -16 LUFS 播客响度均衡（可选，默认 false）。' },
       output: { type: 'string', description: '输出 MP3 路径（可选，相对路径按会话工作目录解析）。' },
       subtitleOutput: { type: 'string', description: '导出同步字幕文件路径（可选，.srt 或 .vtt，相对路径按会话工作目录解析）。' },
     }),
@@ -434,7 +672,8 @@ export function buildVoiceTools(
       render: (_args, value) => {
         const rec = asRecord(value)
         const chunksInfo = typeof rec.chunks === 'number' && rec.chunks > 1 ? '，共 ' + rec.chunks + ' 段' : ''
-        const lines = ['语音合成完成：' + rec.output + '（' + rec.bytes + ' 字节，音色 ' + rec.voice + chunksInfo + '）']
+        const voiceLabel = typeof rec.voice === 'string' && rec.voice !== '' ? rec.voice : '参考音频克隆'
+        const lines = ['语音合成完成：' + rec.output + '（' + rec.bytes + ' 字节，音色 ' + voiceLabel + chunksInfo + '）']
         const subtitleFile = typeof rec.subtitleFile === 'string' ? rec.subtitleFile : ''
         if (subtitleFile !== '') lines.push('字幕文件已写入：' + subtitleFile)
         return [{ type: 'text', text: lines.join('\n') }]
@@ -446,10 +685,14 @@ export function buildVoiceTools(
       throwIfAborted(signal)
       const args = asRecord(rawArgs)
       const cwd = sessionCwd(exec)
-      const useEdge = cfg.ttsEngine === 'edge' || deps.tts !== undefined || deps.ttsWithMeta !== undefined
-      const defaultVoice = optionalString(args, 'voice') ?? cfg.ttsVoice
-      const defaultRate = optionalString(args, 'rate') ?? cfg.ttsRate
-      const defaultPitch = optionalString(args, 'pitch') ?? cfg.ttsPitch
+      const topVoice = optionalString(args, 'voice')
+      const topPersona = optionalString(args, 'persona')
+      const topRate = optionalString(args, 'rate')
+      const topPitch = optionalString(args, 'pitch')
+      const topInstructions = optionalString(args, 'instructions')
+      const topReferenceAudio = optionalString(args, 'referenceAudio')
+      const topReferenceText = optionalString(args, 'referenceText')
+      const normalizeLoudness = args.normalizeLoudness === true
       const requested = optionalString(args, 'output')
       const subtitleOutput = optionalString(args, 'subtitleOutput')
       const needSubtitles = subtitleOutput !== undefined
@@ -459,7 +702,15 @@ export function buildVoiceTools(
         if (rawSegments.length > MAX_TTS_SEGMENTS) {
           throw new Error('segments 最多 ' + MAX_TTS_SEGMENTS + ' 段（当前 ' + rawSegments.length + ' 段）。')
         }
-        assertTtsEngineReady(cfg, useEdge)
+        const topSpec = resolveEffectiveVoiceSpec(cfg, cwd, {
+          voice: topVoice,
+          persona: topPersona,
+          rate: topRate,
+          pitch: topPitch,
+          instructions: topInstructions,
+          referenceAudio: topReferenceAudio,
+          referenceText: topReferenceText,
+        })
         const parsedSegments: ParsedSegment[] = []
         let totalChars = 0
         for (let i = 0; i < rawSegments.length; i++) {
@@ -469,16 +720,74 @@ export function buildVoiceTools(
           const segText = args.cleanMarkdown === true ? cleanMarkdownForSpeech(rawSegText).trim() : rawSegText
           if (segText === '') throw new Error('第 ' + (i + 1) + ' 段清理 Markdown 后文本为空。')
           totalChars += segText.length
-          const segVoice = optionalString(seg, 'voice') ?? defaultVoice
-          const segRate = optionalString(seg, 'rate') ?? defaultRate
-          const segPitch = optionalString(seg, 'pitch') ?? defaultPitch
-          assertTtsVoice(segVoice, useEdge)
-          assertProsody(segRate, segPitch)
-          const pauseMs = typeof seg.pauseMs === 'number' && Number.isFinite(seg.pauseMs) && seg.pauseMs >= 0
+
+          const segVoice = optionalString(seg, 'voice')
+          const segPersona = optionalString(seg, 'persona')
+          const segRate = optionalString(seg, 'rate')
+          const segPitch = optionalString(seg, 'pitch')
+          const segPauseMs = typeof seg.pauseMs === 'number' && Number.isFinite(seg.pauseMs) && seg.pauseMs >= 0
             ? Math.min(10000, Math.round(seg.pauseMs))
-            : 300
+            : undefined
+          const segInstructions = optionalString(seg, 'instructions')
+          const segReferenceAudio = optionalString(seg, 'referenceAudio')
+          const segReferenceText = optionalString(seg, 'referenceText')
+
+          let segSpec: EffectiveVoiceSpec
+          if (segVoice !== undefined || segPersona !== undefined) {
+            segSpec = resolveEffectiveVoiceSpec(cfg, cwd, {
+              voice: segVoice,
+              persona: segPersona,
+              rate: segRate ?? topRate,
+              pitch: segPitch ?? topPitch,
+              pauseMs: segPauseMs,
+              instructions: segInstructions ?? topInstructions,
+              referenceAudio: segReferenceAudio ?? topReferenceAudio,
+              referenceText: segReferenceText ?? topReferenceText,
+            })
+          } else if (segReferenceAudio !== undefined) {
+            segSpec = resolveEffectiveVoiceSpec(cfg, cwd, {
+              voice: topVoice,
+              persona: topPersona,
+              rate: segRate ?? topRate,
+              pitch: segPitch ?? topPitch,
+              pauseMs: segPauseMs,
+              instructions: segInstructions ?? topInstructions,
+              referenceAudio: segReferenceAudio,
+              referenceText: segReferenceText ?? topReferenceText,
+            })
+          } else {
+            const reusedRefs = topSpec.references !== undefined && segReferenceText !== undefined
+              ? topSpec.references.map((r) => ({ audioDataUri: r.audioDataUri, text: segReferenceText }))
+              : topSpec.references
+            segSpec = {
+              voice: topSpec.voice,
+              rate: segRate ?? topSpec.rate,
+              pitch: segPitch ?? topSpec.pitch,
+              pauseMs: segPauseMs ?? topSpec.pauseMs,
+              ...(segInstructions !== undefined || topSpec.instructions !== undefined
+                ? { instructions: segInstructions ?? topSpec.instructions }
+                : {}),
+              ...(reusedRefs !== undefined ? { references: reusedRefs } : {}),
+              hasReferenceAudio: topSpec.hasReferenceAudio,
+            }
+          }
+
+          const segUseEdge = resolveUseEdge(cfg, segSpec.hasReferenceAudio)
+          assertTtsEngineReady(cfg, segUseEdge)
+          assertTtsVoice(segSpec.voice, segUseEdge, segSpec.references !== undefined)
+          assertProsody(segSpec.rate, segSpec.pitch)
+
           const chunks = segText.length > 4000 ? splitTextIntoChunks(segText, 2800) : [segText]
-          parsedSegments.push({ chunks, voice: segVoice, rate: segRate, pitch: segPitch, pauseMs })
+          parsedSegments.push({
+            chunks,
+            voice: segSpec.voice,
+            rate: segSpec.rate,
+            pitch: segSpec.pitch,
+            pauseMs: segSpec.pauseMs,
+            useEdge: segUseEdge,
+            instructions: segSpec.instructions,
+            references: segSpec.references,
+          })
         }
         if (totalChars > MAX_TTS_CHARS) {
           throw new Error('segments 总文本超过 ' + MAX_TTS_CHARS + ' 字符上限（当前 ' + totalChars + ' 字符）。')
@@ -486,15 +795,33 @@ export function buildVoiceTools(
         resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd)
         if (subtitleOutput !== undefined) resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd)
 
-        const tasks: Array<{ segIndex: number; text: string; voice: string; rate: string; pitch: string }> = []
+        const tasks: Array<{
+          segIndex: number
+          text: string
+          voice: string
+          rate: string
+          pitch: string
+          useEdge: boolean
+          instructions?: string
+          references?: VoiceReference[]
+        }> = []
         for (let s = 0; s < parsedSegments.length; s++) {
           const seg = parsedSegments[s]
           for (const chunkText of seg.chunks) {
-            tasks.push({ segIndex: s, text: chunkText, voice: seg.voice, rate: seg.rate, pitch: seg.pitch })
+            tasks.push({
+              segIndex: s,
+              text: chunkText,
+              voice: seg.voice,
+              rate: seg.rate,
+              pitch: seg.pitch,
+              useEdge: seg.useEdge,
+              instructions: seg.instructions,
+              references: seg.references,
+            })
           }
         }
         const chunkResults = await mapLimit(tasks, TTS_CHUNK_CONCURRENCY, signal, (task) =>
-          synthesizeChunk(cfg, useEdge, task.text, task.voice, task.rate, task.pitch, needSubtitles, signal),
+          synthesizeChunk(cfg, task.useEdge, task.text, task.voice, task.rate, task.pitch, needSubtitles, signal, task.instructions, task.references),
         )
         throwIfAborted(signal)
 
@@ -526,14 +853,15 @@ export function buildVoiceTools(
           }
         }
 
-        const audio = buffers.length === 1 ? buffers[0] : concatMp3Buffers(buffers)
+        let audio = buffers.length === 1 ? buffers[0] : concatMp3Buffers(buffers)
+        audio = await maybeNormalizeAudio(normalizeLoudness, audio, signal)
         const output = writeWorkspaceFile(resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd), audio, cwd, undefined, cfg.overwrite)
         let subtitleFile = ''
         if (subtitleOutput !== undefined) {
           const formatted = formatSubtitles(allCues, subtitleFormatOf(subtitleOutput))
           subtitleFile = writeWorkspaceFile(resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd), formatted, cwd, undefined, cfg.overwrite)
         }
-        return { output, bytes: audio.length, voice: defaultVoice, rate: defaultRate, pitch: defaultPitch, textLength: totalChars, chunks: tasks.length, subtitleFile }
+        return { output, bytes: audio.length, voice: topSpec.voice, rate: topSpec.rate, pitch: topSpec.pitch, textLength: totalChars, chunks: tasks.length, subtitleFile }
       }
 
       const inputFile = optionalString(args, 'inputFile')
@@ -558,9 +886,19 @@ export function buildVoiceTools(
         throw new Error('文本超过 ' + MAX_TTS_CHARS + ' 字符上限（当前 ' + finalText.length + ' 字符），请拆分处理。')
       }
 
+      const spec = resolveEffectiveVoiceSpec(cfg, cwd, {
+        voice: topVoice,
+        persona: topPersona,
+        rate: topRate,
+        pitch: topPitch,
+        instructions: topInstructions,
+        referenceAudio: topReferenceAudio,
+        referenceText: topReferenceText,
+      })
+      const useEdge = resolveUseEdge(cfg, spec.hasReferenceAudio)
       assertTtsEngineReady(cfg, useEdge)
-      assertTtsVoice(defaultVoice, useEdge)
-      assertProsody(defaultRate, defaultPitch)
+      assertTtsVoice(spec.voice, useEdge, spec.references !== undefined)
+      assertProsody(spec.rate, spec.pitch)
       resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd)
       if (subtitleOutput !== undefined) resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd)
 
@@ -569,13 +907,13 @@ export function buildVoiceTools(
       let subtitleFile = ''
 
       if (finalText.length <= 5000 && !needSubtitles && useEdge) {
-        const res = await synthesizeChunk(cfg, true, finalText, defaultVoice, defaultRate, defaultPitch, false, signal)
+        const res = await synthesizeChunk(cfg, true, finalText, spec.voice, spec.rate, spec.pitch, false, signal, spec.instructions, spec.references)
         audio = res.audio
       } else {
         const chunks = splitTextIntoChunks(finalText, 2800)
         chunkCount = chunks.length
         const results = await mapLimit(chunks, TTS_CHUNK_CONCURRENCY, signal, (chunk) =>
-          synthesizeChunk(cfg, useEdge, chunk, defaultVoice, defaultRate, defaultPitch, needSubtitles, signal),
+          synthesizeChunk(cfg, useEdge, chunk, spec.voice, spec.rate, spec.pitch, needSubtitles, signal, spec.instructions, spec.references),
         )
         throwIfAborted(signal)
         audio = results.length === 1 ? results[0].audio : concatMp3Buffers(results.map((r) => r.audio))
@@ -597,8 +935,9 @@ export function buildVoiceTools(
       }
 
       throwIfAborted(signal)
+      audio = await maybeNormalizeAudio(normalizeLoudness, audio, signal)
       const output = writeWorkspaceFile(resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd), audio, cwd, undefined, cfg.overwrite)
-      return { output, bytes: audio.length, voice: defaultVoice, rate: defaultRate, pitch: defaultPitch, textLength: finalText.length, chunks: chunkCount, subtitleFile }
+      return { output, bytes: audio.length, voice: spec.voice, rate: spec.rate, pitch: spec.pitch, textLength: finalText.length, chunks: chunkCount, subtitleFile }
     },
     get timeoutMs() { return getCfg().timeoutMs + 10000 },
   }
@@ -779,9 +1118,9 @@ export function buildVoiceTools(
   const voicePreview: VoiceToolDefinition = {
     name: 'voice_preview',
     isConcurrencySafe: () => !getCfg().overwrite,
-    description: '音色试听：用一段固定试听文本批量生成短样例 MP3，并默认生成可直接在浏览器试听对比的 index.html。voices 为音色 id 数组（可选，缺省 voice_list 前 4 个，最多 8 个）；text 可自定义（≤200 字符）；样例文件写入输出目录（默认会话工作目录 voice_previews）。单个音色失败不阻断其他。',
+    description: '音色试听：用一段固定试听文本批量生成短样例 MP3，并默认生成可直接在浏览器试听对比的 index.html。voices 支持音色 id、内置角色人设（persona）或自定义音色别名（customVoices）数组（可选，缺省 voice_list 前 4 个，最多 8 个）；text 可自定义（≤200 字符）；样例文件写入输出目录（默认会话工作目录 voice_previews）。单个音色失败不阻断其他。',
     parameters: compileParameters({
-      voices: { type: 'array', items: { type: 'string' }, description: '音色 id 数组（可选，缺省 voice_list 前 4 个，最多 8 个）。' },
+      voices: { type: 'array', items: { type: 'string' }, description: '音色 id、内置人设 ID/标签（如 late-night-radio、anime-boy）或自定义音色别名数组（可选，缺省 voice_list 前 4 个，最多 8 个）。' },
       text: { type: 'string', description: '试听文本（可选，默认中英混合试听句，≤200 字符）。' },
       outputDir: { type: 'string', description: '输出目录（可选，默认会话工作目录下 voice_previews）。' },
       htmlIndex: { type: 'boolean', default: true, description: '是否在输出目录生成可试听的 index.html 试听页（默认 true）。' },
@@ -819,29 +1158,32 @@ export function buildVoiceTools(
       if (targets.length > 8) throw new Error('voices 最多 8 个（当前 ' + targets.length + ' 个），试听一次别太多，慢且耗资源。')
       const text = optionalString(args, 'text') ?? DEFAULT_PREVIEW_TEXT
       if (text.length > 200) throw new Error('试听文本请控制在 200 字以内（试听要短平快）。')
-      const useEdge = cfg.ttsEngine === 'edge' || deps.tts !== undefined
-      assertTtsEngineReady(cfg, useEdge)
+      assertTtsEngineReady(cfg, resolveUseEdge(cfg, false))
       const cwd = sessionCwd(exec)
       const outDir = ensureWorkspaceDirectory(optionalString(args, 'outputDir') ?? 'voice_previews', cwd)
-      const outcomes = await mapLimit<string, PreviewOutcome>(targets, PREVIEW_CONCURRENCY, signal, async (voice) => {
+      const outcomes = await mapLimit<string, PreviewOutcome>(targets, PREVIEW_CONCURRENCY, signal, async (target) => {
         throwIfAborted(signal)
-        if (useEdge && !isValidVoiceId(voice)) {
-          return { voice, error: '音色 id 不合法（应为 zh-CN-XXXNeural 形式的 edge 音色）' }
-        }
-        if (!useEdge && voice.trim() === '') {
-          return { voice, error: '音色 id 不合法：不能为空' }
-        }
         try {
-          const { audio } = await synthesizeChunk(cfg, useEdge, text, voice, cfg.ttsRate, cfg.ttsPitch, false, signal)
+          const spec = resolveEffectiveVoiceSpec(cfg, cwd, { voice: target })
+          const targetUseEdge = resolveUseEdge(cfg, spec.hasReferenceAudio)
+          assertTtsEngineReady(cfg, targetUseEdge)
+          if (targetUseEdge && !isValidVoiceId(spec.voice)) {
+            return { voice: target, error: '音色 id 不合法（应为 zh-CN-XXXNeural 形式的 edge 音色）' }
+          }
+          if (!targetUseEdge && spec.voice.trim() === '' && (spec.references === undefined || spec.references.length === 0)) {
+            return { voice: target, error: '音色 id 不合法：不能为空' }
+          }
+          assertProsody(spec.rate, spec.pitch)
+          const { audio } = await synthesizeChunk(cfg, targetUseEdge, text, spec.voice, spec.rate, spec.pitch, false, signal, spec.instructions, spec.references)
           throwIfAborted(signal)
-          const name = 'voice-preview-' + voice.replace(/[^a-zA-Z0-9-]/g, '_') + '.mp3'
+          const name = 'voice-preview-' + target.replace(/[^a-zA-Z0-9-\u4e00-\u9fa5]/g, '_') + '.mp3'
           // 复用 resolveOutputPath：overwrite=false 时改名加序号，不再直接覆盖同名样例。
           const file = resolveOutputPath(join(outDir, name), '', cfg.overwrite, cwd)
           const output = writeWorkspaceFile(file, audio, cwd, undefined, cfg.overwrite)
-          return { voice, output, bytes: audio.length }
+          return { voice: target, output, bytes: audio.length }
         } catch (error) {
           throwIfAborted(signal)
-          return { voice, error: error instanceof Error ? error.message : String(error) }
+          return { voice: target, error: error instanceof Error ? error.message : String(error) }
         }
       })
       const samples: Array<Record<string, unknown>> = []
@@ -856,11 +1198,33 @@ export function buildVoiceTools(
         const htmlSamples = samples.map((s) => {
           const id = String(s.voice)
           const meta = voiceMap.get(id)
+          if (meta !== undefined) {
+            return {
+              voice: id,
+              fileName: basename(String(s.output)),
+              locale: meta.locale,
+              gender: meta.gender,
+            }
+          }
+          const persona = resolvePersona(id)
+          if (persona !== undefined) {
+            return {
+              voice: id,
+              fileName: basename(String(s.output)),
+              locale: persona.label + '（' + persona.voice + '）',
+            }
+          }
+          const alias = resolveCustomVoice(cfg.customVoices, id)
+          if (alias !== undefined) {
+            return {
+              voice: id,
+              fileName: basename(String(s.output)),
+              locale: '自定义音色' + (alias.voice ? '（' + alias.voice + '）' : ''),
+            }
+          }
           return {
             voice: id,
             fileName: basename(String(s.output)),
-            locale: meta?.locale,
-            gender: meta?.gender,
           }
         })
         const html = renderPreviewHtml(htmlSamples, text)
@@ -915,7 +1279,11 @@ export function buildVoiceTools(
       const sttHints: string[] = []
 
       // 1. TTS 音色（保持 checks[0] 以兼容既有测试对 checks[0].detail 的断言）
-      const voiceOk = cfg.ttsEngine === 'edge' ? isValidVoiceId(cfg.ttsVoice) : cfg.ttsVoice.trim() !== ''
+      const matchedAlias = resolveCustomVoice(cfg.customVoices, cfg.ttsVoice)
+      const matchedPersona = resolvePersona(cfg.ttsVoice)
+      const voiceOk = cfg.ttsEngine === 'edge'
+        ? (isValidVoiceId(cfg.ttsVoice) || matchedAlias !== undefined || matchedPersona !== undefined)
+        : cfg.ttsVoice.trim() !== ''
       checks.push({
         name: 'TTS 音色',
         ok: voiceOk,

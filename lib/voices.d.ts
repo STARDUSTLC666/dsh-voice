@@ -1,5 +1,5 @@
 /**
- * 常用音色清单（edge-tts 全量约 500 个，这里收录常用中/英/日/韩/法/德/俄/西与旗舰多语/方言音色）。
+ * 常用音色清单（内置 45 个全年龄段/多风格/方言常用音色与 10 个开箱即用角色人设配方）。
  *
  * @module dsh-voice/voices
  */
@@ -10,13 +10,28 @@ export interface VoiceInfo {
     locale: string;
     tags?: string[];
 }
+/** 角色人设配方（绑定音色、语速、音调与默认段间停顿）。 */
+export interface VoicePersona {
+    id: string;
+    label: string;
+    voice: string;
+    rate: string;
+    pitch: string;
+    pauseMs: number;
+    description: string;
+    tags: string[];
+}
 /** 常用音色。 */
 export declare const VOICES: VoiceInfo[];
+/** 开箱即用角色人设配方（可直接传给 voice_tts / voice_preview 的 persona 参数）。 */
+export declare const VOICE_PERSONAS: VoicePersona[];
 /** 校验音色 id：常用清单内或符合 edge-tts 命名规则（含方言/文字子标签/多语/HD 变体）。 */
 export declare function isValidVoiceId(id: string): boolean;
-/** 按地区/语言、性别或标签筛选内置常用音色。 */
+/** 按人设 ID 或中文名称匹配内置角色人设配方（大小写不敏感）。 */
+export declare function resolvePersona(idOrLabel: string): VoicePersona | undefined;
+/** 按地区/语言、性别或标签筛选音色列表（默认筛选内置常用音色）。 */
 export declare function filterVoices(filter?: {
     locale?: string;
     gender?: string;
     tag?: string;
-}): VoiceInfo[];
+}, sourceVoices?: VoiceInfo[]): VoiceInfo[];

@@ -10,6 +10,18 @@ export type TtsEngine = 'edge' | 'openai' | 'siliconflow' | 'custom'
 /** ASR 引擎类型。 */
 export type AsrEngine = 'groq' | 'openai' | 'siliconflow' | 'custom'
 
+/** 自定义音色与零样本克隆别名。 */
+export interface CustomVoiceAlias {
+  name: string
+  voice?: string
+  persona?: string
+  rate?: string
+  pitch?: string
+  instructions?: string
+  referenceAudio?: string
+  referenceText?: string
+}
+
 /** 插件行配置（cordis.patch.yml 里的 config 段，可缺省）。 */
 export interface VoiceConfig {
   ttsEngine?: TtsEngine
@@ -26,6 +38,7 @@ export interface VoiceConfig {
   proxyUrl?: string
   timeoutMs?: number
   overwrite?: boolean
+  customVoices?: CustomVoiceAlias[]
 }
 
 /** 解析后的配置。 */
@@ -44,6 +57,7 @@ export interface ResolvedVoiceConfig {
   proxyUrl: string
   timeoutMs: number
   overwrite: boolean
+  customVoices: CustomVoiceAlias[]
 }
 
 export const ASR_PRESETS: Record<'groq' | 'openai' | 'siliconflow', { baseUrl: string; model: string }> = {
@@ -91,6 +105,68 @@ export function resolveTtsApiKey(config: VoiceConfig | undefined, env: NodeJS.Pr
 /** 默认告警出口：非法字段逐项回退时点名，避免一个字段拖垮整份配置。 */
 function defaultWarn(message: string): void {
   console.warn('[dsh-voice] ' + message)
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
+function trimOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+function parseCustomVoices(raw: unknown, onWarning: (message: string) => void): CustomVoiceAlias[] {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) {
+    onWarning('customVoices 配置不合法（必须是数组），已忽略该项。')
+    return []
+  }
+  const result: CustomVoiceAlias[] = []
+  for (let i = 0; i < raw.length; i += 1) {
+    const item = raw[i]
+    if (!isPlainObject(item)) continue
+    const name = trimOptionalString(item.name)
+    if (name === undefined) continue
+
+    const entry: CustomVoiceAlias = { name }
+    const voice = trimOptionalString(item.voice)
+    if (voice !== undefined) entry.voice = voice
+    const persona = trimOptionalString(item.persona)
+    if (persona !== undefined) entry.persona = persona
+
+    const rate = trimOptionalString(item.rate)
+    if (rate !== undefined) {
+      if (isValidProsody(rate)) entry.rate = rate
+      else onWarning(`customVoices[${i}].rate 配置不合法（格式如 +0%、+15%、-10%），已忽略该字段，当前值：${rate}`)
+    }
+
+    const pitch = trimOptionalString(item.pitch)
+    if (pitch !== undefined) {
+      if (isValidProsody(pitch)) entry.pitch = pitch
+      else onWarning(`customVoices[${i}].pitch 配置不合法（格式如 +0Hz、+2Hz、-1st），已忽略该字段，当前值：${pitch}`)
+    }
+
+    const instructions = trimOptionalString(item.instructions)
+    if (instructions !== undefined) entry.instructions = instructions
+    const referenceAudio = trimOptionalString(item.referenceAudio)
+    if (referenceAudio !== undefined) entry.referenceAudio = referenceAudio
+    const referenceText = trimOptionalString(item.referenceText)
+    if (referenceText !== undefined) entry.referenceText = referenceText
+
+    result.push(entry)
+  }
+  return result
+}
+
+/** 按别名（大小写不敏感）查找自定义音色配置。 */
+export function resolveCustomVoice(customVoices: readonly CustomVoiceAlias[], nameOrId: string): CustomVoiceAlias | undefined {
+  const target = (typeof nameOrId === 'string' ? nameOrId : '').trim().toLowerCase()
+  if (target === '') return undefined
+  return customVoices.find((alias) => alias.name.trim().toLowerCase() === target)
 }
 
 /**
@@ -142,6 +218,7 @@ export function resolveConfig(config: VoiceConfig | undefined | null, onWarning:
     }
   }
   const overwrite = cfg.overwrite === true
+  const customVoices = parseCustomVoices(cfg.customVoices, onWarning)
   return {
     ttsEngine,
     ttsBaseUrl,
@@ -157,5 +234,6 @@ export function resolveConfig(config: VoiceConfig | undefined | null, onWarning:
     proxyUrl,
     timeoutMs,
     overwrite,
+    customVoices,
   }
 }

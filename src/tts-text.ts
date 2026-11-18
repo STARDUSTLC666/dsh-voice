@@ -3,6 +3,10 @@
  *
  * @module dsh-voice/tts-text
  */
+import { execFile } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { SubtitleCue } from './edge-tts.js'
 
 /**
@@ -325,4 +329,60 @@ export function renderPreviewHtml(
     '</body>',
     '</html>',
   ].join('\n') + '\n'
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) throw signal.reason
+}
+
+function runFfmpegLoudnorm(inPath: string, outPath: string, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal)
+  return new Promise<void>((resolvePromise, rejectPromise) => {
+    execFile(
+      'ffmpeg',
+      ['-y', '-i', inPath, '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', '-ar', '24000', '-ac', '1', '-b:a', '48k', outPath],
+      { signal, maxBuffer: 4 * 1024 * 1024 },
+      (error, _stdout, stderr) => {
+        if (signal?.aborted === true) {
+          rejectPromise(signal.reason)
+          return
+        }
+        if (error) {
+          const detail = typeof stderr === 'string' && stderr.trim() !== ''
+            ? stderr.trim().slice(-300)
+            : error.message
+          rejectPromise(new Error('ffmpeg 响度均衡失败：' + detail))
+          return
+        }
+        resolvePromise()
+      },
+    )
+  })
+}
+
+/**
+ * 使用本地 ffmpeg 对 MP3 音频执行播客级响度均衡（-16 LUFS / TP -1.5 dBTP / LRA 11）。
+ * @throws 取消时抛出 signal.reason，ffmpeg 失败时抛中文错误。
+ */
+export async function normalizeAudioLoudness(mp3: Buffer, signal?: AbortSignal): Promise<Buffer> {
+  throwIfAborted(signal)
+  const tempDir = mkdtempSync(join(tmpdir(), 'dsh-voice-loudnorm-'))
+  try {
+    const inPath = join(tempDir, 'in.mp3')
+    const outPath = join(tempDir, 'out.mp3')
+    writeFileSync(inPath, mp3)
+    await runFfmpegLoudnorm(inPath, outPath, signal)
+    throwIfAborted(signal)
+    const normalized = readFileSync(outPath)
+    if (normalized.length === 0) {
+      throw new Error('ffmpeg 响度均衡结果为空。')
+    }
+    return normalized
+  } finally {
+    try {
+      rmSync(tempDir, { recursive: true, force: true })
+    } catch {
+      // 尽力清理临时目录
+    }
+  }
 }

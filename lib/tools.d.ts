@@ -1,7 +1,8 @@
 import { type ResolvedVoiceConfig } from './config.js';
-import { synthesizeSpeech, synthesizeSpeechWithMetadata } from './edge-tts.js';
+import { fetchEdgeVoices, synthesizeSpeech, synthesizeSpeechWithMetadata } from './edge-tts.js';
 import { synthesizeOpenAiSpeech } from './openai-tts.js';
 import { prepareAudioForAsr, transcribe } from './stt.js';
+import { normalizeAudioLoudness } from './tts-text.js';
 /** 模型可见的内容块。 */
 export interface ContentBlock {
     type: 'text';
@@ -33,6 +34,8 @@ export interface VoiceToolDeps {
     openaiTts?: typeof synthesizeOpenAiSpeech;
     stt?: typeof transcribe;
     prepareAudio?: typeof prepareAudioForAsr;
+    fetchVoices?: typeof fetchEdgeVoices;
+    normalizeAudio?: typeof normalizeAudioLoudness;
 }
 /**
  * 构建五个语音工具定义（支持静态配置对象或活引用配置 getter）。

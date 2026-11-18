@@ -1,5 +1,14 @@
 # 更新记录
 
+## 0.8.0 (2026-11-18)
+
+- 全量音色发现与内置目录扩容（Layer 1–2）：`voice_list` 支持 `online: true` 联网拉取并缓存微软 Edge 300+ 实时音色目录（24 小时内存缓存，断网自动回退）；内置音色由 29 个扩充至 45 个，覆盖童声（晓双/晓悠）、少年动漫（云夏）、纪录片/成熟（云泽/晓秋）、老年（晓睿）、激昂解说（云皓）及粤语/台湾腔/河南话/山东话等方言，并附带 `tags` 标签筛选。
+- Full live voice discovery & catalog expansion (Layers 1–2): `voice_list` adds `online: true` to fetch and cache Microsoft Edge's 300+ live neural voice catalog for 24h (with automatic offline fallback); built-in `VOICES` expands from 29 to 45 voices covering child, teen/anime, mature/documentary, elder, expressive commercial, and regional Chinese dialects with tag filtering.
+- 10 组开箱即用角色人设（Layer 2–4）：新增 `VOICE_PERSONAS` 与 `persona` 参数（如 `late-night-radio`、`documentary-narrator`、`anime-boy`、`bedtime-story`、`bilingual-tech-female` 等），可直接用于 `voice_tts`、`segments[]` 分段播客及 `voice_preview` 试听对比。
+- 10 ready-made voice personas (Layers 2–4): introduce `VOICE_PERSONAS` and the `persona` parameter (e.g., `late-night-radio`, `documentary-narrator`, `anime-boy`, `bedtime-story`, `bilingual-tech-female`) across `voice_tts`, multi-speaker `segments[]`, and `voice_preview`.
+- 情绪演技指令、零样本声音克隆与自定义别名（Layer 3–4）：新增 `instructions` 自然语言语气控制（自动映射 SiliconFlow `CosyVoice2-0.5B` `<|endofprompt|>` 前缀及 `[laughter]`/`[breath]` 副语言标记，以及 OpenAI `gpt-4o-mini-tts` `instructions`）；新增工作区边界受控的 `referenceAudio` + `referenceText` 零样本克隆与可热更新的 `customVoices` 自定义别名设置；新增 `normalizeLoudness: true` 调用本机 FFmpeg 执行 `-16 LUFS` 播客响度均衡。
+- Emotion acting, zero-shot cloning & custom aliases (Layers 3–4): add natural-language `instructions` (mapped to `<|endofprompt|>` with `[laughter]`/`[breath]` on SiliconFlow `CosyVoice2-0.5B`, or `instructions` on `gpt-4o-mini-tts`), workspace-bounded `referenceAudio` + `referenceText` zero-shot voice cloning, live-reloaded `customVoices` aliases in DSH Settings, and optional `-16 LUFS` podcast loudness mastering via `normalizeLoudness: true`.
+
 ## 0.7.0 (2026-11-18)
 
 - 稳定性与协议加固（P0）：严格校验 Edge TTS `Path:audio` 音频帧头与 `turn.end` 截断保护；HTTP 403 自动读取响应 `Date` 校准时钟偏差；剔除 XML 1.0 非法控制字符并转义 SSML 属性；扩展方言、多语种及 HD 音色校验与筛选；支持配置 `timeoutMs` 热更新读取与动态 `isConcurrencySafe`；`voice_health` 新增 `ttsReady`/`sttReady`、`scope` 影响面、韵律参数检查及本机免密钥 Whisper 探测。

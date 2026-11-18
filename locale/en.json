@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Voice",
-    "description": "Keyless Edge & OpenAI-compatible text-to-speech (TTS) with long-text/Markdown cleanup, multi-speaker podcasts, SRT/VTT subtitle export, interactive voice previews, and Groq/OpenAI/SiliconFlow/local Whisper speech-to-text (STT) inside the workspace."
+    "description": "Keyless Edge (300+ online voices & all-age/dialect built-ins) & OpenAI/SiliconFlow TTS with 10 personas, emotion/acting instructions, zero-shot cloning & customVoices aliases, Markdown cleanup, multi-speaker podcasts with loudness mastering, SRT/VTT subtitles, browser previews, and multi-engine STT."
   }
 }

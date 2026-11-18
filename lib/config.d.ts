@@ -7,6 +7,17 @@
 export type TtsEngine = 'edge' | 'openai' | 'siliconflow' | 'custom';
 /** ASR 引擎类型。 */
 export type AsrEngine = 'groq' | 'openai' | 'siliconflow' | 'custom';
+/** 自定义音色与零样本克隆别名。 */
+export interface CustomVoiceAlias {
+    name: string;
+    voice?: string;
+    persona?: string;
+    rate?: string;
+    pitch?: string;
+    instructions?: string;
+    referenceAudio?: string;
+    referenceText?: string;
+}
 /** 插件行配置（cordis.patch.yml 里的 config 段，可缺省）。 */
 export interface VoiceConfig {
     ttsEngine?: TtsEngine;
@@ -23,6 +34,7 @@ export interface VoiceConfig {
     proxyUrl?: string;
     timeoutMs?: number;
     overwrite?: boolean;
+    customVoices?: CustomVoiceAlias[];
 }
 /** 解析后的配置。 */
 export interface ResolvedVoiceConfig {
@@ -40,6 +52,7 @@ export interface ResolvedVoiceConfig {
     proxyUrl: string;
     timeoutMs: number;
     overwrite: boolean;
+    customVoices: CustomVoiceAlias[];
 }
 export declare const ASR_PRESETS: Record<'groq' | 'openai' | 'siliconflow', {
     baseUrl: string;
@@ -57,6 +70,8 @@ export declare function isLoopbackBaseUrl(url: string): boolean;
 export declare function resolveAsrApiKey(config: VoiceConfig | undefined, env?: NodeJS.ProcessEnv): string;
 /** TTS 密钥：配置优先，其次环境变量 DSH_VOICE_TTS_KEY。 */
 export declare function resolveTtsApiKey(config: VoiceConfig | undefined, env?: NodeJS.ProcessEnv): string;
+/** 按别名（大小写不敏感）查找自定义音色配置。 */
+export declare function resolveCustomVoice(customVoices: readonly CustomVoiceAlias[], nameOrId: string): CustomVoiceAlias | undefined;
 /**
  * 解析并校验配置：非法字段逐项回退到默认值，其余字段照常生效。
  * @param onWarning 非法字段的告警回调，默认打到 console.warn。
