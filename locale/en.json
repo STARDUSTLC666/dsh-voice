@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Voice",
-    "description": "Keyless Edge neural text-to-speech (TTS), short voice previews, and OpenAI/Groq-compatible speech-to-text (STT) within workspace boundaries."
+    "description": "Keyless Edge & OpenAI-compatible text-to-speech (TTS) with long-text/Markdown cleanup, multi-speaker podcasts, SRT/VTT subtitle export, interactive voice previews, and Groq/OpenAI/SiliconFlow/local Whisper speech-to-text (STT) inside the workspace."
   }
 }

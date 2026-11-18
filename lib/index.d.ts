@@ -31,8 +31,10 @@ export declare function apply(ctx: VoicePluginContext, config?: VoiceConfig | nu
 export * from './config.js';
 export { liveConfig, createVolatile, HostValidationError, type HostSchemaNode, type HostSchemaMeta, type VolatileRef } from './host-config.js';
 export * from './edge-tts.js';
+export * from './openai-tts.js';
 export * from './paths.js';
 export * from './proxy-fetch.js';
 export * from './stt.js';
 export * from './tools.js';
+export * from './tts-text.js';
 export * from './voices.js';

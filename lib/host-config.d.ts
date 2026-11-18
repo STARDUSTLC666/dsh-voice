@@ -103,7 +103,7 @@ export declare const z: {
 };
 /**
  * 宿主原生设置表单 Schema。
- * 标量字段不设 default，以便留空时自动回退内置预设与环境变量 DSH_VOICE_ASR_KEY。
+ * 标量字段不设 default，以便留空时自动回退内置预设与环境变量 DSH_VOICE_ASR_KEY / DSH_VOICE_TTS_KEY。
  */
 export declare const Config: HostSchemaNode<VoiceConfig>;
 /** 活引用视图：同时兼容 DSH >=0.1.7 的 { get() } 活引用与旧宿主/测试传入的普通对象。 */

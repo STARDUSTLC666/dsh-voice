@@ -1,5 +1,14 @@
 # 更新记录
 
+## 0.7.0 (2026-11-18)
+
+- 稳定性与协议加固（P0）：严格校验 Edge TTS `Path:audio` 音频帧头与 `turn.end` 截断保护；HTTP 403 自动读取响应 `Date` 校准时钟偏差；剔除 XML 1.0 非法控制字符并转义 SSML 属性；扩展方言、多语种及 HD 音色校验与筛选；支持配置 `timeoutMs` 热更新读取与动态 `isConcurrencySafe`；`voice_health` 新增 `ttsReady`/`sttReady`、`scope` 影响面、韵律参数检查及本机免密钥 Whisper 探测。
+- P0 hardening: validate Edge TTS `Path:audio` binary frame headers and enforce strict `turn.end` truncation guards; auto-calibrate clock skew from HTTP 403 `Date` headers; strip illegal XML 1.0 control chars and escape SSML attributes; expand dialect, multilingual, and HD voice validation/filtering; resolve `timeoutMs` dynamically with live `isConcurrencySafe`; and enrich `voice_health` with `ttsReady`/`sttReady`, `scope`, prosody validation, and keyless loopback Whisper probing.
+- 核心能力升级（P1）：`voice_tts` 新增 `inputFile` 文档直读、Markdown 清理与 10 万字符长文本自动分段合成，支持多角色 `segments` 播客合成及原生 MP3 静音帧拼接；`voice_tts` 与 `voice_stt` 均支持导出 `.srt`/`.vtt` 字幕（`subtitleOutput`）；`voice_stt` 采用 `openAsBlob` 零拷贝上传，并支持 `autoCompress` 对超 25MB 音频调用 FFmpeg 转码或分段识别。
+- P1 core upgrades: add `inputFile` reading, Markdown cleanup, and 100k-char auto-chunking to `voice_tts`, plus multi-speaker `segments` podcast synthesis with native MP3 silence frames; support `.srt`/`.vtt` `subtitleOutput` in both `voice_tts` and `voice_stt`; switch `voice_stt` to zero-copy `openAsBlob` uploads and add `autoCompress` FFmpeg transcode/segmentation for >25MB audio.
+- 生态扩展与交互增强（P2）：新增 `ttsEngine` 对 OpenAI / SiliconFlow / 自定义网关的支持与 `siliconflow` ASR/TTS 预设；内置零外部依赖的 `socks5://` 与 `socks5h://` 代理隧道；`voice_preview` 生成可视化 `index.html` 音色试听卡片；新增内置工作流技能 `skills/voice-workflow/SKILL.md`。
+- P2 ecosystem & UX: add `ttsEngine` support for OpenAI, SiliconFlow, and custom endpoints with `siliconflow` ASR/TTS presets; add zero-dependency `socks5://`/`socks5h://` proxy tunneling; generate a visual `index.html` audition card in `voice_preview`; and bundle `skills/voice-workflow/SKILL.md`.
+
 ## 0.6.1 (2026-11-18)
 
 - 同步 `@stardustlc/dsh-updates` 0.2.3：侧边栏工作台平时默认隐藏底部更新栏（零高度占用），仅在检测到兼容新版本或执行更新时浮现单行精简提示条；完整更新设置与检查入口统一保留在 DSH「插件」详情页底部。

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "语音",
-    "description": "零密钥 Edge 神经网络语音合成（TTS）、短试听音色预览与 OpenAI/Groq 兼容语音转文字（STT）。"
+    "description": "零密钥 Edge / OpenAI 兼容语音合成（TTS）、长文本与 Markdown 清理、多角色播客、SRT/VTT 字幕导出、网页试听页与 Groq/OpenAI/SiliconFlow/本地 Whisper 语音转文字（STT）。"
   }
 }

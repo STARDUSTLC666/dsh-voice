@@ -73,6 +73,30 @@ function assertWritableTarget(target: string, root: string, label: string): void
   }
 }
 
+/** 校验工作区内的普通文件，允许调用方定制越界提示后缀。 */
+function assertWorkspaceFileInternal(input: string, cwd: string, label: string, outsideHint: string): string {
+  const root = workspaceRoot(cwd)
+  const requested = resolve(root, input)
+  let real: string
+  try {
+    real = realpathSync(requested)
+  } catch {
+    throw new Error(label + '不存在：' + input)
+  }
+  if (!isInside(root, real)) {
+    throw new Error(label + '必须位于会话工作区内：' + input + '（实际解析到 ' + real + '）。' + outsideHint)
+  }
+  if (!statSync(real).isFile()) throw new Error(label + '不是普通文件：' + input)
+  return requested
+}
+
+/**
+ * 校验工作区内的普通文件（如文稿输入）：必须存在于会话工作区内且是普通文件。
+ */
+export function assertWorkspaceFile(input: string, cwd: string = process.cwd(), label = '输入文件'): string {
+  return assertWorkspaceFileInternal(input, cwd, label, '请先复制到工作目录。')
+}
+
 /**
  * 校验音频文件：必须存在于会话工作区内，且是普通文件。
  *
@@ -81,19 +105,7 @@ function assertWritableTarget(target: string, root: string, label: string): void
  * 音频整份上传给 ASR 服务。
  */
 export function assertAudioFile(input: string, cwd: string = process.cwd()): string {
-  const root = workspaceRoot(cwd)
-  const requested = resolve(root, input)
-  let real: string
-  try {
-    real = realpathSync(requested)
-  } catch {
-    throw new Error('音频文件不存在：' + input)
-  }
-  if (!isInside(root, real)) {
-    throw new Error('音频文件必须位于会话工作区内：' + input + '（实际解析到 ' + real + '）。请先复制到工作目录再转写。')
-  }
-  if (!statSync(real).isFile()) throw new Error('音频文件不是普通文件：' + input)
-  return requested
+  return assertWorkspaceFileInternal(input, cwd, '音频文件', '请先复制到工作目录再转写。')
 }
 
 /**

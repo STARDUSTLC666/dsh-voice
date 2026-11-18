@@ -1,4 +1,8 @@
 /**
+ * 校验工作区内的普通文件（如文稿输入）：必须存在于会话工作区内且是普通文件。
+ */
+export declare function assertWorkspaceFile(input: string, cwd?: string, label?: string): string;
+/**
  * 校验音频文件：必须存在于会话工作区内，且是普通文件。
  *
  * 相对路径按 cwd（会话工作区）解析，返回解析后的绝对路径；符号链接会先

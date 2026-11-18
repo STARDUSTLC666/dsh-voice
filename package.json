@@ -1,7 +1,7 @@
 {
   "name": "dsh-voice",
-  "version": "0.6.1",
-  "description": "DeepSeek Harness 语音插件：零密钥 Edge TTS 朗读、音色试听、兼容 ASR 转写与工作区输出保护。欢迎提交 issues 和 PR。",
+  "version": "0.7.0",
+  "description": "DeepSeek Harness 语音插件：零密钥 Edge TTS 朗读、多角色播客与字幕导出、音色试听、兼容 ASR 转写与工作区输出保护。欢迎提交 issues 和 PR。",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -27,7 +27,8 @@
     "LICENSES",
     "THIRD_PARTY_NOTICES.md",
     "assets/plugin-icon.webp",
-    "locale"
+    "locale",
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-updates.mjs",

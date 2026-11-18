@@ -1,3 +1,4 @@
+import * as net from 'node:net';
 /**
  * 代理 fetch 一并带出 undici 自己的 FormData 构造器。
  *
@@ -8,4 +9,9 @@
 export type ProxyFetch = typeof globalThis.fetch & {
     FormData: typeof globalThis.FormData;
 };
+/**
+ * 通过 RFC 1928 / RFC 1929 SOCKS5 协议建立到目标 host:port 的 TCP 隧道。
+ */
+export declare function connectSocks5Tunnel(proxyUrl: URL, targetHost: string, targetPort: number, useRemoteDns: boolean, signal?: AbortSignal): Promise<net.Socket>;
 export declare function createProxyFetch(proxyUrl: string): ProxyFetch;
+export declare function getProxyWsAgent(proxyUrl: string): unknown;
