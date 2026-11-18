@@ -1,5 +1,10 @@
 # 更新记录
 
+## 0.8.1 (2026-11-18)
+
+- 升级共享更新组件至 `@stardustlc/dsh-updates@0.2.4`：对话页新增一键热更新提醒卡片，自动检查周期缩短至 6 小时，手动热更新后可顺手开启包含兼容功能小版本的空闲自动更新。
+- Upgrade `@stardustlc/dsh-updates` to `0.2.4`: add an actionable in-chat hot-update reminder card, 6-hour background update checks, compatible minor+patch idle auto-updates, and a post-update opt-in prompt.
+
 ## 0.8.0 (2026-11-18)
 
 - 全量音色发现与内置目录扩容（Layer 1–2）：`voice_list` 支持 `online: true` 联网拉取并缓存微软 Edge 300+ 实时音色目录（24 小时内存缓存，断网自动回退）；内置音色由 29 个扩充至 45 个，覆盖童声（晓双/晓悠）、少年动漫（云夏）、纪录片/成熟（云泽/晓秋）、老年（晓睿）、激昂解说（云皓）及粤语/台湾腔/河南话/山东话等方言，并附带 `tags` 标签筛选。
