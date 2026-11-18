@@ -1,47 +1,61 @@
 ---
 name: voice-workflow
-description: Best-practice workflows for dsh-voice: 5-theme Voice Studio sidebar workbench, 300+ online Edge voice discovery, 10 built-in personas, exact MP3 duration feedback (durationMs/durationSec), pronunciation lexicon (pronunciations), reverse .srt/.vtt video dubbing (subtitleInput), podcast BGM auto-ducking (bgmFile/bgmVolume/bgmDucking) with -16 LUFS mastering, emotion/acting instructions, SiliconFlow SHA-256 cached cloning & customVoices aliases, direct file TTS with Markdown cleanup, and speaker-diarized transcription (diarize). Load when turning documents/subtitles into speech, hitting exact duration targets, producing podcasts with BGM, cloning voices, or transcribing audio.
+description: Best-practice workflows for dsh-voice: 5-theme Voice Studio creative-loop workbench (8s mic clone, visual dialogue synth, workspace library & click-to-seek subtitle player), 300+ online Edge voices with keep-alive WSS pool, 10 personas, short-video clause/word subtitles & karaoke .ass export (subtitleGranularity/maxCharsPerCue), inline [pause:500ms] tags, word-boundary pronunciation lexicon (pronunciations), MP3 ID3v2 CHAP/CTOC audiobook/podcast chapters (chaptersOutput), zero-drift atempo .srt/.vtt dubbing (subtitleInput), VBR-safe durationMs/durationSec, podcast BGM auto-ducking & -16 LUFS mastering, SiliconFlow SHA-256 cached cloning, direct video (.mp4/.mkv/.mov/.avi) STT, and speaker diarization (diarize). Load when synthesizing speech/subtitles, dubbing timelines, building chaptered podcasts/audiobooks, cloning voices, or transcribing audio/video.
 ---
 
 # Voice Workflow (`dsh-voice`)
 
-Use this guide when converting articles, notes, briefings, or subtitle timelines into audio/subtitles, auditioning voices/personas, cloning reference voices, mixing podcast BGM, or transcribing recordings inside the active session workspace.
+Use this guide when converting articles, notes, briefings, or subtitle timelines into audio, chapters, or karaoke subtitles, auditioning voices/personas, cloning reference voices, mixing podcast BGM, or transcribing audio and video recordings inside the active session workspace.
 
-## 1. Native Voice Studio Workbench, Discovery & Auditions
+## 1. Native Voice Studio Workbench ("True Creative Loop"), Discovery & Auditions
 
-- **5-theme Voice Studio sidebar workbench**:
-  - Users can open the native DSH sidebar workbench (5 themes: 原生清透 / 米白纸感 / Claude 暖书卷 / 8-Bit 像素 / 晴空薄荷 + interactive Coachmark onboarding tour) to audition 300+ voices and 10 personas in-panel, dictate with the browser microphone, and manage `customVoices` and `pronunciations` rules without editing YAML.
-- **Online 300+ Edge voice catalog + 45+ curated built-ins**:
-  - Call `voice_list({ online: true, locale, gender, tag })` to fetch and cache (24h in-memory) Microsoft's live 300+ neural voice catalog. If offline or unreachable, it falls back automatically (`source: "builtin-fallback"`) to 45+ curated voices spanning child (`zh-CN-XiaoshuangNeural`, `zh-CN-XiaoyouNeural`), teen/anime (`zh-CN-YunxiaNeural`), mature/documentary (`zh-CN-YunzeNeural`, `zh-CN-XiaoqiuNeural`), elder (`zh-CN-XiaoruiNeural`), passionate (`zh-CN-YunhaoNeural`), and dialects (Northeast `zh-CN-liaoning-XiaobeiNeural`, Shaanxi `zh-CN-shaanxi-XiaoniNeural`, Sichuan `zh-CN-sichuan-YunxiNeural`, Henan `zh-CN-henan-YundengNeural`, Shandong `zh-CN-shandong-YunxiangNeural`, Cantonese `zh-HK-WanLungNeural` / `zh-HK-HiuMaanNeural`, Taiwanese `zh-TW-YunJheNeural` / `zh-TW-HsiaoChenNeural` / `zh-TW-HsiaoYuNeural`).
-  - `voice_list` also returns `personas` (unless `includePersonas: false`) and any `customVoices` aliases configured in DSH Settings.
+- **5-theme Voice Studio sidebar workbench & creative loop**:
+  - Open the native DSH sidebar workbench (5 themes: 原生清透 / 米白纸感 / Claude 暖书卷 / 8-Bit 像素 / 晴空薄荷 + interactive Coachmark tour) to:
+    1. Audition 300+ Edge voices and 10 personas (`0.8x–1.5x` speed + live duration badge) with an **interactive click-to-seek synchronized subtitle follow-along player** and 1-click MP3 download;
+    2. Compose and synthesize multi-speaker dialogues visually in-panel (optionally saving `.mp3` + `.srt` to `voice_outputs/`);
+    3. Record **8 seconds on the browser mic to create a cloned voice in 1 click** (saves to `voice_clones/`, auto-transcribes `referenceText` via ASR, and registers in `customVoices`);
+    4. Browse and play generated workspace audio + paired `.srt`/`.vtt` subtitles in the **Workspace Library** tab, and manage `pronunciations` visually.
+- **Online 300+ Edge voice catalog, keep-alive WSS pool & 45+ curated built-ins**:
+  - Call `voice_list({ online: true, locale, gender, tag })` to fetch and cache (24h in-memory) Microsoft's live 300+ neural voice catalog, with automatic offline fallback (`source: "builtin-fallback"`) to 45+ curated voices across child (`zh-CN-XiaoshuangNeural`, `zh-CN-XiaoyouNeural`), teen/anime (`zh-CN-YunxiaNeural`), mature/documentary (`zh-CN-YunzeNeural`, `zh-CN-XiaoqiuNeural`), elder (`zh-CN-XiaoruiNeural`), passionate (`zh-CN-YunhaoNeural`), and dialects (Northeast `zh-CN-liaoning-XiaobeiNeural`, Shaanxi `zh-CN-shaanxi-XiaoniNeural`, Sichuan `zh-CN-sichuan-YunxiNeural`, Henan `zh-CN-henan-YundengNeural`, Shandong `zh-CN-shandong-YunxiangNeural`, Cantonese `zh-HK-WanLungNeural` / `zh-HK-HiuMaanNeural`, Taiwanese `zh-TW-YunJheNeural` / `zh-TW-HsiaoChenNeural` / `zh-TW-HsiaoYuNeural`).
+  - Edge TTS automatically reuses a keep-alive WebSocket connection pool across multi-chunk articles and podcast turns with transient network retry.
+  - `voice_list` also returns `personas` (unless `includePersonas: false`) and configured `customVoices` aliases.
 - **10 ready-made personas (`persona`)**:
   - Use `persona` in `voice_tts`, `segments[]`, or `voice_preview` for instant character tuning (`voice`, `rate`, `pitch`, `pauseMs`):
     `late-night-radio`, `podcast-host-female`, `podcast-host-male`, `documentary-narrator`, `bedtime-story`, `anime-boy`, `energetic-anchor`, `news-briefing`, `bilingual-tech-female`, `bilingual-tech-male`.
 - **Interactive audition page**:
-  - Call `voice_preview({ voices: [...], text })` with raw voice IDs, built-in `persona` IDs/labels, or `customVoices` alias names. It writes MP3 samples and an interactive `voice_previews/index.html` browser audition page (with playback speed toggles and one-click ID copy).
+  - Call `voice_preview({ voices: [...], text })` with raw voice IDs, `persona` IDs/labels, or `customVoices` aliases to generate MP3 samples and `voice_previews/index.html`.
 
-## 2. Direct File Synthesis, Pronunciation Lexicon & Exact Duration Targets
+## 2. Direct File Synthesis, Inline Pauses, Word-Boundary Lexicon & Chapters
 
 - **Do not copy large `.md` or `.txt` files into `text` arguments.** Pass `inputFile` directly to `voice_tts`:
   ```json
   {
     "inputFile": "docs/article.md",
     "persona": "documentary-narrator",
-    "pronunciations": [{ "word": "Nginx", "alias": "Engine X" }],
+    "pronunciations": [
+      { "word": "Nginx", "alias": "Engine X" },
+      { "word": "OS", "alias": "Operating System" }
+    ],
     "output": "article.mp3",
-    "subtitleOutput": "article.srt"
+    "subtitleOutput": "article.srt",
+    "chaptersOutput": "article-chapters.md"
   }
   ```
-- **Pronunciation lexicon (`pronunciations`)**:
-  - Pass `pronunciations` as `[{ word, alias }]` (or `{ "Nginx": "Engine X" }`) on `voice_tts`, or configure persistent rules in DSH Settings `pronunciations` (per-call rules override same-word Settings rules).
-  - On Edge TTS, rules compile to SSML `<sub alias="...">` so exported `.srt`/`.vtt` subtitles preserve the original spelling (`Nginx`) while speech pronounces the alias (`Engine X`). On OpenAI/SiliconFlow/custom engines, spoken text applies non-recursive longest-first replacement while fallback subtitle cues retain the original text.
-- **Exact MP3 duration feedback (`durationMs` / `durationSec`)**:
-  - Every `voice_tts` call inspects the final MP3 stream across CBR/VBR and multi-engine chunks (generating matched-sample-rate silence frames for pauses) and returns exact `durationMs` and `durationSec`.
-  - When targeting a strict duration (e.g. a 60s short-video voiceover), check `durationSec` and re-adjust `rate` or trim script length accordingly.
-- `cleanMarkdown` defaults to `true` when `inputFile` ends with `.md` or `.markdown` (pass `cleanMarkdown: true` explicitly for inline Markdown in `text`). It strips fenced code blocks, URLs, Markdown links/images, headings, emphasis markers, and HTML tags while preserving punctuation and paragraph breaks.
-- Texts longer than `5,000` characters (up to `100,000` characters) are automatically split on sentence/clause boundaries and merged into a single seamless MP3 in one `voice_tts` call.
+- **Inline speech pause tags (`[pause:500ms]`, `[break:600ms]`, `[停顿0.6s]`)**:
+  - Embed `[pause:500ms]`, `[break:600ms]`, or `[停顿0.6s]` (`50ms–10s`) anywhere inside `text`, `inputFile`, or `segments[]`.
+  - Compiled to native SSML `<break time="...ms"/>` on Edge TTS and matched-sample-rate MP3 silence frames on OpenAI/SiliconFlow/custom engines, while automatically stripped from exported `.srt`/`.vtt`/`.ass` subtitles.
+- **Word-boundary-safe pronunciation lexicon (`pronunciations`)**:
+  - Pass `pronunciations` as `[{ word, alias }]` (or `{ "Nginx": "Engine X" }`) on `voice_tts`, or save persistent rules in DSH Settings `pronunciations` (per-call overrides same-word Settings rules).
+  - ASCII acronyms/words (`OS`, `UI`, `SQL`, `Nginx`) enforce word boundaries so `OS` matches `"Mac OS"` and `"OS系统"` while **never** corrupting substrings inside words like `"POST"` or `"BUILD"`.
+  - On Edge TTS, rules compile to SSML `<sub alias="...">` so subtitles keep original spelling (`Nginx`) while speech pronounces the alias (`Engine X`). Non-Edge engines apply longest-first non-recursive replacement on spoken text while keeping original spelling in fallback subtitles.
+- **Audiobook & Markdown chapters (native MP3 ID3v2 `CHAP`/`CTOC` + `chaptersOutput`)**:
+  - Multi-heading Markdown (`#` / `##` / `###`, ignoring code-block comments) in `inputFile` (or `title` on `segments[]`) automatically embeds native clickable ID3v2.3 `CHAP`/`CTOC` chapter bookmarks into the MP3, returns `chapters: [{ title, startMs, endMs }]`, and optionally writes `MM:SS` show-notes timestamps (`chapters.md` / `.txt`) or structured JSON (`chapters.json`) via `chaptersOutput`.
+- **Exact VBR-safe MP3 duration feedback (`durationMs` / `durationSec`)**:
+  - `concatMp3Buffers` strips per-segment `Xing`/`Info`/`VBRI` metadata frames when joining multi-segment OpenAI/SiliconFlow VBR MP3s so player seekbars and `inspectMp3Buffer` (`durationMs` / `durationSec`) always reflect the full audio duration.
+  - When targeting a strict duration (e.g. a 60s short-video voiceover), check `durationSec` and re-adjust `rate` or script length.
+- `cleanMarkdown` defaults to `true` for `.md`/`.markdown` `inputFile` (pass `cleanMarkdown: true` for inline Markdown in `text`). Texts over `5,000` chars (up to `100,000` chars) split cleanly on sentence/clause boundaries and merge into one seamless MP3.
 
-## 3. Reverse `.srt` / `.vtt` Video Dubbing (`subtitleInput`)
+## 3. Zero-Drift Reverse `.srt` / `.vtt` Video Dubbing (`subtitleInput`)
 
 - When dubbing an existing video subtitle timeline into voiceover audio, pass `subtitleInput: "video.srt"` (or `.vtt`, up to 200 cues) to `voice_tts`:
   ```json
@@ -53,31 +67,33 @@ Use this guide when converting articles, notes, briefings, or subtitle timelines
     "subtitleOutput": "dubbed.srt"
   }
   ```
-- Each cue is synthesized and measured with `inspectMp3Buffer`; if a cue runs more than `8%` past its `[startMs, endMs]` window, `voice_tts` automatically scales its `rate` (clamped `-30%` to `+85%`) and re-synthesizes once, then inserts matched-sample-rate millisecond silence padding between cues so audio stays locked to the video timeline.
+- Each cue is measured with `inspectMp3Buffer`: if a cue runs `>8%` past its `[startMs, endMs]` window, `voice_tts` scales its `rate` (`-30%` to `+85%`) and re-synthesizes once; if a dense cue still exceeds its window by `>3%` and local `ffmpeg` is available, `dsh-voice` applies pitch-preserving FFmpeg `atempo` window fitting and pads matched-sample-rate millisecond silences between cues for zero cumulative timeline drift.
 
 ## 4. Oral Script Adaptation for Briefings
 
-When the user asks to summarize notes, changelogs, or reports into a spoken briefing rather than reading a file verbatim:
+When summarizing notes, changelogs, or reports into a spoken briefing rather than reading verbatim:
 
-- Rewrite bullet lists, Markdown tables, code identifiers, and bare URLs into natural spoken sentences before calling `voice_tts`.
-- Spell out or paraphrase abbreviations and symbols (or register technical acronyms in `pronunciations`) so the narration sounds like a human host.
-- Keep target duration in mind (roughly 220–260 Chinese characters or 130–160 English words per minute at `+0%` rate) and verify with the returned `durationSec`.
+- Rewrite bullet lists, Markdown tables, code identifiers, and bare URLs into natural spoken sentences, using inline `[pause:500ms]` markers for clean section transitions.
+- Spell out or register technical acronyms (`OS`, `UI`, `SQL`, `K8s`) in `pronunciations` so narration sounds natural without corrupting English words.
+- Target roughly 220–260 Chinese characters or 130–160 English words per minute at `+0%` rate and verify with `durationSec`.
 
-## 5. Multi-Speaker Podcasts, BGM Auto-Ducking & Loudness Mastering
+## 5. Multi-Speaker Podcasts, Chapters, BGM Auto-Ducking & Loudness Mastering
 
-Produce two-host or multi-role dialogues with background music in a single MP3 using `voice_tts` `segments` (up to 50 segments per call), `bgmFile`, `bgmVolume`, `bgmDucking`, and `-16 LUFS` broadcast loudness mastering:
+Produce multi-host dialogues with clickable MP3 chapters and background music in one `voice_tts` call using `segments` (up to 50 turns, optional per-segment `title`), `chaptersOutput`, `bgmFile`, `bgmVolume`, `bgmDucking`, and `-16 LUFS` mastering:
 
 ```json
 {
   "segments": [
     {
+      "title": "开场与看点",
       "persona": "podcast-host-female",
-      "text": "欢迎收听本期技术早报，今天我们来聊聊最新的语音工作流。",
+      "text": "欢迎收听本期技术早报 [pause:400ms] 今天聊聊最新的语音工作流。",
       "pauseMs": 350
     },
     {
+      "title": "核心升级拆解",
       "persona": "podcast-host-male",
-      "text": "没错，现在长文稿、BGM 自动闪避和响度均衡都可以一次搞定。",
+      "text": "没错，现在章节书签、卡拉 OK 字幕和 BGM 自动闪避都能一次搞定。",
       "rate": "+5%",
       "pauseMs": 300
     }
@@ -87,42 +103,52 @@ Produce two-host or multi-role dialogues with background music in a single MP3 u
   "bgmDucking": true,
   "normalizeLoudness": true,
   "output": "podcast.mp3",
-  "subtitleOutput": "podcast.srt"
+  "subtitleOutput": "podcast.srt",
+  "chaptersOutput": "podcast-chapters.md"
 }
 ```
 
 - **Podcast BGM Auto-Ducking (`bgmFile`, `bgmVolume`, `bgmDucking`)**:
-  - Loops workspace `bgmFile` under the speech track at `bgmVolume` (`0.02–1.0`, default `0.18`), applies FFmpeg `sidechaincompress` ducking when `bgmDucking !== false` so music automatically dips whenever hosts speak, adds a smooth fade-out at the end, and optionally chains `-16 LUFS` loudness normalization (`normalizeLoudness: true`). Requires local `ffmpeg`.
+  - Loops workspace `bgmFile` at `bgmVolume` (`0.02–1.0`, default `0.18`), applies FFmpeg `sidechaincompress` ducking when `bgmDucking !== false`, adds a smooth fade-out at the end, and optionally chains `-16 LUFS` loudness normalization (`normalizeLoudness: true`) before embedding `CHAP`/`CTOC` MP3 chapters. Requires local `ffmpeg`.
 - **Emotion, acting & paralinguistics (`instructions`)**:
-  - Pass natural-language acting prompts via `instructions` on `voice_tts` or per segment in `segments[]`.
-  - On SiliconFlow `CosyVoice2-0.5B`, `instructions` is automatically prepended with `<|endofprompt|>` and supports inline `[laughter]` and `[breath]` tags.
-  - On OpenAI `gpt-4o-mini-tts`, `instructions` is passed natively as the top-level API parameter.
-  - On custom Kokoro endpoints, `voice` also accepts voice-blending expressions such as `zf_xiaobei*0.6+zf_xiaoni*0.4`.
+  - Pass acting prompts via `instructions` on `voice_tts` or per segment in `segments[]` (auto-prepends `<|endofprompt|>` on SiliconFlow `CosyVoice2-0.5B` with inline `[laughter]`/`[breath]`; sent natively on OpenAI `gpt-4o-mini-tts`; custom Kokoro endpoints also accept blends like `zf_xiaobei*0.6+zf_xiaoni*0.4`).
 - **Standalone loudness mastering (`normalizeLoudness: true`)**:
-  - When `bgmFile` is omitted, runs local `ffmpeg` (`loudnorm=I=-16:TP=-1.5:LRA=11`) after concatenation so multi-speaker or cross-voice podcasts have consistent broadcast volume. (Requires `ffmpeg` installed locally.)
+  - When `bgmFile` is omitted, runs local `ffmpeg` (`loudnorm=I=-16:TP=-1.5:LRA=11`) after concatenation for consistent broadcast volume.
 
 ## 6. Zero-Shot Voice Cloning (`referenceAudio`) & `customVoices` Aliases
 
 - **Zero-shot reference cloning with SHA-256 URI caching**:
-  - Pass a 5–10 second clean workspace speech clip (`≤10 MB`, `.wav`/`.mp3`/etc.) in `referenceAudio` alongside its transcript in `referenceText` on `voice_tts` or `segments[]`.
-  - Requires `ttsEngine` set to `siliconflow` (`FunAudioLLM/CosyVoice2-0.5B`) or `custom` (e.g., local GPT-SoVITS / IndexTTS). Using `referenceAudio` while `ttsEngine: "edge"` throws an actionable error guiding the user to switch engines.
-  - On SiliconFlow, `dsh-voice` automatically uploads the reference clip to `/uploads/audio/voice` once per SHA-256 hash and caches the returned `speech:...` URI across podcast segments instead of re-sending megabytes of base64 audio on every turn.
-- **Reusable named aliases (`customVoices`)**:
-  - Users can save named characters (`name`, `voice`, `persona`, `rate`, `pitch`, `instructions`, `referenceAudio`, `referenceText`) in DSH Settings `customVoices` or the Voice Studio sidebar (live-reloaded without restart) and invoke them by `name` in `voice_tts`, `segments[]`, or `voice_preview`.
+  - Pass a 5–10s clean workspace clip (`≤10 MB`, `.wav`/`.mp3`/`.webm`/etc.) in `referenceAudio` + `referenceText` on `voice_tts` or `segments[]` (requires `ttsEngine` set to `siliconflow` or `custom`).
+  - SiliconFlow uploads `referenceAudio` to `/uploads/audio/voice` once per SHA-256 hash and reuses the cached `speech:...` URI across all podcast turns.
+- **1-click Studio mic clone & `customVoices` aliases**:
+  - Users can record 8s directly in the Voice Studio **Mic & Custom Voices** tab (`voice_clones/` + auto-ASR + `customVoices` registration) or save named presets in DSH Settings `customVoices` and invoke them by `name` in `voice_tts`, `segments[]`, or `voice_preview`.
 
-## 7. Synchronized Subtitles for Video Pipelines (`subtitleOutput`)
+## 7. Short-Video Word/Clause Subtitles & Karaoke `.ass` Export
 
-- Pass `subtitleOutput: "out.srt"` or `"out.vtt"` to `voice_tts` (single-speaker, `segments`, or `subtitleInput`) to export synchronized sentence-boundary subtitles alongside the MP3 at zero extra API cost.
-- Pass `subtitleOutput: "transcript.srt"` (or `.vtt`) to `voice_stt` to automatically request word/segment timestamps and write subtitles alongside the transcript.
-- Hand the resulting `.mp3` and `.srt`/`.vtt` files directly to `dsh-ffmpeg` for subtitle burn-in or `dsh-remotion` for timeline composition.
+- **Short-video compact cues & karaoke `.ass` (`subtitleGranularity`, `maxCharsPerCue`, `subtitleOutput`)**:
+  - Pass `subtitleGranularity: "clause"` (or `"word"`, default `"sentence"`) and `maxCharsPerCue` (default `16`, range `4–80`, ~16 CJK chars or ~32 English chars per screen) to `voice_tts` so vertical short videos get punchy single-line captions instead of overflowing paragraphs.
+  - Pass `subtitleOutput: "clip.ass"` to export a `1080x1920` SubStation Alpha (`v4.00+`) file with genuine `{\kf...}` word-by-word karaoke timing (or `.srt`/`.vtt` for standard players):
+    ```json
+    {
+      "text": "三秒学会短视频卡拉OK动态高亮字幕！",
+      "persona": "energetic-anchor",
+      "subtitleGranularity": "clause",
+      "maxCharsPerCue": 14,
+      "output": "clip.mp3",
+      "subtitleOutput": "clip.ass"
+    }
+    ```
+- Pass `subtitleOutput: "transcript.srt"` (or `.vtt`) to `voice_stt` for timestamped ASR subtitles.
+- Hand the resulting `.mp3` and `.ass`/`.srt`/`.vtt` files directly to `dsh-ffmpeg` for subtitle burn-in (`subtitles=clip.ass`) or `dsh-remotion` for programmatic video composition.
 
-## 8. Speaker-Diarized Transcription (`diarize`) & Health Checks
+## 8. Direct Video Transcription, Speaker Diarization (`diarize`) & Health Checks
 
+- **Direct video container transcription (`voice_stt`)**:
+  - Pass `.mp4`, `.mkv`, `.mov`, or `.avi` (plus `.flv`/`.wmv`/`.m4v`/`.ts`/`.mts`) directly to `voice_stt({ audio: "lecture.mp4", subtitleOutput: "lecture.srt" })`. When local `ffmpeg` is available, `dsh-voice` automatically strips the video stream (`-vn`) into lightweight 16kHz mono audio before uploading to ASR — even if the video file is under 25 MB.
 - **Speaker diarization (`diarize: true` on `voice_stt`)**:
-  - Pass `diarize: true` to `voice_stt` to separate multi-speaker recordings: splits stereo channels via local `ffmpeg` when available (`说话人 A` / `说话人 B`), or reads/infers speaker turn switches in `verbose_json`, returning `speakers`, formatted `[说话人 A 00:01]` transcript paragraphs, and `[speaker]`-prefixed `.srt`/`.vtt` cues.
-- **Domain accuracy**: Pass project names, acronyms, and speaker terms in `voice_stt({ audio, prompt: "DeepSeek Harness, Cordis, ...", output: "meeting.txt" })`.
-- **Large recordings (>25 MB)**: Pass `autoCompress: true` to `voice_stt`. When local `ffmpeg` is available, `dsh-voice` automatically transcodes (16kHz mono) and splits recordings larger than 24 MB into segments, merges the transcript, and shifts subtitle timestamps accurately.
-- **Local / keyless Whisper**: If `asrEngine` is `custom` pointing to a loopback URL (e.g. `http://127.0.0.1:8000/v1`), no `asrApiKey` is required.
-- **Scoped diagnostics**:
-  - Run `voice_health({ scope: "tts" })` before TTS-only tasks so an unconfigured ASR key does not trigger false alarms (also recognizes built-in `persona` IDs and `customVoices` aliases as valid `ttsVoice` values).
-  - Run `voice_health({ scope: "stt" })` before transcription, or `voice_health()` (default `all`) for full engine, voice/prosody, proxy (`http://`, `https://`, `socks5://`, `socks5h://`), and key diagnostics.
+  - Separates stereo channels via local `ffmpeg` (`说话人 A` / `说话人 B`) or infers speaker turns from `verbose_json`, returning `speakers`, `[说话人 A 00:01]` paragraphs, and `[speaker]`-prefixed `.srt`/`.vtt` cues.
+- **Domain accuracy & >25 MB audio**:
+  - Pass domain terms in `prompt` (`voice_stt({ audio, prompt: "DeepSeek Harness, Cordis" })`), and pass `autoCompress: true` to automatically transcode and split audio recordings over 25 MB via local `ffmpeg`.
+- **Local / keyless Whisper & scoped diagnostics**:
+  - Loopback `custom` ASR (`127.0.0.1` / `localhost`) requires no `asrApiKey`.
+  - Run `voice_health({ scope: "tts" })` before TTS-only tasks, `voice_health({ scope: "stt" })` before transcription, or `voice_health()` for full engine, voice/persona/alias, prosody, proxy (`http://`, `https://`, `socks5://`, `socks5h://`), and key checks.

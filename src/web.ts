@@ -1,11 +1,14 @@
 /**
- * 本地受鉴权 Voice Studio 后端路由：复用宿主 connection/webServer 载体，提供音色列表、即时试听、麦克风转写与安全配置更新。
+ * 本地受鉴权 Voice Studio 后端路由：复用宿主 connection/webServer 载体，提供音色列表、即时试听、
+ * 8 秒录音直出克隆角色、多角色对话合成、工作区成品库、麦克风转写与安全配置更新。
  * 绝不向前端返回 asrApiKey / ttsApiKey / proxyUrl 等敏感凭据原文。
  *
  * @module dsh-voice/web
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { EventEmitter } from 'node:events'
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import {
   isLoopbackBaseUrl,
@@ -16,12 +19,33 @@ import {
   type ResolvedVoiceConfig,
   type TtsEngine,
 } from './config.js'
-import { fetchEdgeVoices, synthesizeSpeech } from './edge-tts.js'
-import { rateToSpeed, synthesizeOpenAiSpeech } from './openai-tts.js'
+import {
+  fetchEdgeVoices,
+  synthesizeSpeech,
+  synthesizeSpeechWithMetadata,
+  type SubtitleCue,
+} from './edge-tts.js'
+import { rateToSpeed, synthesizeOpenAiSpeech, type ReferenceVoiceSample } from './openai-tts.js'
+import {
+  assertAudioFile,
+  ensureWorkspaceDirectory,
+  resolveOutputPath,
+  writeWorkspaceFile,
+} from './paths.js'
 import { createProxyFetch } from './proxy-fetch.js'
 import { hasFfmpeg, transcribe } from './stt.js'
 import { DEFAULT_PREVIEW_TEXT } from './tools.js'
-import { applyPronunciationsPlain, inspectMp3Buffer } from './tts-text.js'
+import {
+  applyPronunciationsPlain,
+  concatMp3Buffers,
+  createSilenceMp3,
+  formatSubtitles,
+  inspectMp3Buffer,
+  mixAudioWithBgm,
+  normalizeAudioLoudness,
+  offsetCues,
+  parseSubtitleFile,
+} from './tts-text.js'
 import { filterVoices, isValidVoiceId, resolvePersona, VOICE_PERSONAS, VOICES } from './voices.js'
 
 export const VOICE_STUDIO_SETTINGS_ROUTE = '/_dsh/dsh-voice/studio'
@@ -29,8 +53,16 @@ export const VOICE_STUDIO_API_ROUTE = '/api/dsh-voice/studio'
 
 const AUTHENTICATED_CARRIER = Symbol('DSH authenticated Voice Studio connection')
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024
+const MAX_MEDIA_BYTES = 15 * 1024 * 1024
 const MAX_BODY = 16 * 1024 * 1024
 const MAX_PREVIEW_CHARS = 300
+const MAX_DIALOGUE_SEGMENTS = 20
+const MAX_DIALOGUE_CHARS = 6000
+const MAX_LIBRARY_ITEMS = 40
+
+const ALLOWED_CLONE_EXTS = new Set(['.wav', '.mp3', '.webm', '.ogg', '.m4a'])
+const LIBRARY_AUDIO_EXTS = new Set(['.mp3', '.wav', '.m4a', '.ogg', '.webm', '.flac'])
+const LIBRARY_SUBDIRS = ['', 'voice_outputs', 'voice_previews', 'voice_clones'] as const
 
 const loopback = (host: string) =>
   ['127.0.0.1', 'localhost', '::1', '[::1]', '::ffff:127.0.0.1'].includes(host.toLowerCase())
@@ -59,10 +91,72 @@ export interface StudioPronunciationRule {
 export interface VoiceStudioBackendOptions {
   updateSettings?: (patch: Record<string, unknown>) => Promise<void>
   writable?: () => boolean
+  workspaceDir?: string | (() => string)
   tts?: typeof synthesizeSpeech
+  ttsWithMeta?: typeof synthesizeSpeechWithMetadata
   openaiTts?: typeof synthesizeOpenAiSpeech
   fetchVoices?: typeof fetchEdgeVoices
   stt?: typeof transcribe
+}
+
+function resolveWorkspaceRoot(cwd: string): string {
+  const absolute = resolve(cwd)
+  try {
+    return realpathSync(absolute)
+  } catch {
+    return absolute
+  }
+}
+
+function isInsideRoot(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate)
+  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith('..' + sep))
+}
+
+function toWorkspaceRelativePath(filePath: string, cwd: string): string {
+  const root = resolveWorkspaceRoot(cwd)
+  let realTarget = resolve(root, filePath)
+  try {
+    realTarget = realpathSync(realTarget)
+  } catch {
+    // 保留基于 root 解析的目标路径
+  }
+  return relative(root, realTarget).replace(/\\/g, '/')
+}
+
+function audioMimeFromExt(ext: string): string {
+  switch (ext.toLowerCase()) {
+    case '.mp3':
+      return 'audio/mpeg'
+    case '.wav':
+      return 'audio/wav'
+    case '.m4a':
+      return 'audio/mp4'
+    case '.ogg':
+      return 'audio/ogg'
+    case '.webm':
+      return 'audio/webm'
+    case '.flac':
+      return 'audio/flac'
+    default:
+      return 'application/octet-stream'
+  }
+}
+
+function decodeAudioBase64(raw: unknown, label = '录音音频'): Buffer {
+  const rawB64 = typeof raw === 'string' ? raw.trim() : ''
+  const cleanedB64 = rawB64.replace(/^data:[^;]+;base64,/i, '')
+  if (!cleanedB64) {
+    throw new VoiceStudioError(`请提供${label}数据（audioBase64）。`, 400)
+  }
+  const audioBuf = Buffer.from(cleanedB64, 'base64')
+  if (audioBuf.length === 0) {
+    throw new VoiceStudioError(`${label}数据为空或格式无效。`, 400)
+  }
+  if (audioBuf.length > MAX_AUDIO_BYTES) {
+    throw new VoiceStudioError(`${label}超过 10 MiB 上限。`, 413, 'bodyLarge')
+  }
+  return audioBuf
 }
 
 function requestGuard(req: IncomingMessage): void {
@@ -130,7 +224,7 @@ function carrierGuard(request: Request): void {
 }
 
 function readBody(req: IncomingMessage, signal: AbortSignal): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolvePromise, reject) => {
     let length = 0
     const chunks: Buffer[] = []
     const cleanup = () => {
@@ -160,7 +254,7 @@ function readBody(req: IncomingMessage, signal: AbortSignal): Promise<Record<str
       try {
         const value = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error()
-        resolve(value as Record<string, unknown>)
+        resolvePromise(value as Record<string, unknown>)
       } catch {
         reject(new VoiceStudioError('请求内容不是有效的 JSON。'))
       }
@@ -309,6 +403,16 @@ function sanitizeConfigPatch(rawPatch: unknown): Record<string, unknown> {
   return sanitized
 }
 
+interface ResolvedStudioVoice {
+  voice: string
+  displayVoice: string
+  rate: string
+  pitch: string
+  pauseMs: number
+  instructions?: string
+  references?: ReferenceVoiceSample[]
+}
+
 export function createVoiceStudioBackend(
   readCfg: () => ResolvedVoiceConfig,
   options: VoiceStudioBackendOptions = {},
@@ -324,8 +428,231 @@ export function createVoiceStudioBackend(
     return cachedFetchImpl
   }
 
+  const getWorkspaceDir = (): string => {
+    const raw = typeof options.workspaceDir === 'function' ? options.workspaceDir() : options.workspaceDir
+    return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : process.cwd()
+  }
+
   const writable = () =>
     options.writable !== undefined ? options.writable() !== false : typeof options.updateSettings === 'function'
+
+  const resolveUseEdge = (cfg: ResolvedVoiceConfig): boolean =>
+    options.tts !== undefined || options.ttsWithMeta !== undefined
+      ? true
+      : options.openaiTts !== undefined && cfg.ttsEngine !== 'edge'
+        ? false
+        : cfg.ttsEngine === 'edge'
+
+  const resolveStudioVoice = (
+    cfg: ResolvedVoiceConfig,
+    useEdge: boolean,
+    cwd: string,
+    input: {
+      voice?: string
+      persona?: string
+      speakerAlias?: string
+      rate?: string
+      pitch?: string
+      pauseMs?: number
+      instructions?: string
+    },
+    refAudioCache?: Map<string, Buffer>,
+  ): ResolvedStudioVoice => {
+    const rawVoice = input.voice
+    const rawPersona = input.persona
+
+    let customAlias: CustomVoiceAlias | undefined
+    let voiceConsumedAsAlias = false
+    let personaConsumedAsAlias = false
+
+    if (rawPersona !== undefined) {
+      customAlias = resolveCustomVoice(cfg.customVoices, rawPersona)
+      if (customAlias !== undefined) personaConsumedAsAlias = true
+    }
+    if (customAlias === undefined && rawVoice !== undefined) {
+      customAlias = resolveCustomVoice(cfg.customVoices, rawVoice)
+      if (customAlias !== undefined) voiceConsumedAsAlias = true
+    }
+    if (
+      customAlias === undefined &&
+      rawVoice === undefined &&
+      rawPersona === undefined &&
+      input.speakerAlias !== undefined
+    ) {
+      customAlias = resolveCustomVoice(cfg.customVoices, input.speakerAlias)
+    }
+
+    let defaultAlias: CustomVoiceAlias | undefined
+    if (rawVoice === undefined && rawPersona === undefined && customAlias === undefined) {
+      defaultAlias = resolveCustomVoice(cfg.customVoices, cfg.ttsVoice)
+    }
+    const activeAlias = customAlias ?? defaultAlias
+
+    let voiceConsumedAsPersona = false
+    let personaSpec = !personaConsumedAsAlias && rawPersona !== undefined ? resolvePersona(rawPersona) : undefined
+    if (personaSpec === undefined && activeAlias?.persona !== undefined) {
+      personaSpec = resolvePersona(activeAlias.persona)
+    }
+    if (personaSpec === undefined && !voiceConsumedAsAlias && rawVoice !== undefined && !isValidVoiceId(rawVoice)) {
+      personaSpec = resolvePersona(rawVoice)
+      if (personaSpec !== undefined) voiceConsumedAsPersona = true
+    }
+
+    let defaultPersona: ReturnType<typeof resolvePersona>
+    if (
+      rawVoice === undefined &&
+      rawPersona === undefined &&
+      activeAlias === undefined &&
+      !isValidVoiceId(cfg.ttsVoice)
+    ) {
+      defaultPersona = resolvePersona(cfg.ttsVoice)
+    }
+    const activePersona = personaSpec ?? defaultPersona
+
+    let references: ReferenceVoiceSample[] | undefined
+    if (!useEdge && activeAlias?.referenceAudio) {
+      const refPath = assertAudioFile(activeAlias.referenceAudio, cwd)
+      let buf = refAudioCache?.get(refPath)
+      if (buf === undefined) {
+        const size = statSync(refPath).size
+        if (size <= 0 || size > MAX_AUDIO_BYTES) {
+          throw new VoiceStudioError('参考音频大小异常（必须为 1B 至 10MiB）：' + activeAlias.referenceAudio, 400)
+        }
+        buf = readFileSync(refPath)
+        refAudioCache?.set(refPath, buf)
+      }
+      references = [
+        {
+          audioDataUri: 'data:' + audioMimeFromExt(extname(refPath)) + ';base64,' + buf.toString('base64'),
+          rawAudio: buf,
+          filename: basename(refPath),
+          ...(activeAlias.referenceText ? { text: activeAlias.referenceText } : {}),
+        },
+      ]
+    }
+
+    const explicitRawVoice = !voiceConsumedAsAlias && !voiceConsumedAsPersona ? rawVoice : undefined
+    const resolvedVoice =
+      !useEdge && references !== undefined && explicitRawVoice === undefined
+        ? (activeAlias?.voice ?? '')
+        : (explicitRawVoice ?? activeAlias?.voice ?? activePersona?.voice ?? cfg.ttsVoice)
+    const displayVoice = resolvedVoice || activeAlias?.name || cfg.ttsVoice
+    const resolvedRate = input.rate ?? activeAlias?.rate ?? activePersona?.rate ?? cfg.ttsRate
+    const resolvedPitch = input.pitch ?? activeAlias?.pitch ?? activePersona?.pitch ?? cfg.ttsPitch
+    const resolvedInstructions = input.instructions ?? activeAlias?.instructions
+    const defaultPause = activePersona?.pauseMs ?? 300
+    const rawPause = input.pauseMs !== undefined && Number.isFinite(input.pauseMs) ? input.pauseMs : defaultPause
+    const resolvedPauseMs = Math.min(5000, Math.max(0, Math.round(rawPause)))
+
+    if (!isValidProsody(resolvedRate)) {
+      throw new VoiceStudioError('语速格式不合法（如 +0%、+15%、-10%）。', 400)
+    }
+    if (!isValidProsody(resolvedPitch)) {
+      throw new VoiceStudioError('音调格式不合法（如 +0Hz、+2Hz、-1st）。', 400)
+    }
+
+    return {
+      voice: resolvedVoice,
+      displayVoice,
+      rate: resolvedRate,
+      pitch: resolvedPitch,
+      pauseMs: resolvedPauseMs,
+      ...(resolvedInstructions ? { instructions: resolvedInstructions } : {}),
+      ...(references ? { references } : {}),
+    }
+  }
+
+  const synthesizeSegmentWithCues = async (
+    cfg: ResolvedVoiceConfig,
+    useEdge: boolean,
+    segText: string,
+    spec: ResolvedStudioVoice,
+    pronunciations: readonly StudioPronunciationRule[],
+    signal: AbortSignal,
+  ): Promise<{ audio: Buffer; info: ReturnType<typeof inspectMp3Buffer>; cues: SubtitleCue[] }> => {
+    if (useEdge) {
+      if (!isValidVoiceId(spec.voice)) {
+        throw new VoiceStudioError('音色 ID 不合法：' + spec.voice, 400)
+      }
+      const pronOpt = pronunciations.length > 0 ? { pronunciations } : {}
+      if (options.ttsWithMeta !== undefined || options.tts === undefined) {
+        const withMeta = options.ttsWithMeta ?? synthesizeSpeechWithMetadata
+        const res = await withMeta(
+          {
+            text: segText,
+            voice: spec.voice,
+            rate: spec.rate,
+            pitch: spec.pitch,
+            boundary: 'sentence',
+            ...pronOpt,
+          },
+          { proxyUrl: cfg.proxyUrl },
+          cfg.timeoutMs,
+          signal,
+        )
+        const info = inspectMp3Buffer(res.audio)
+        const cues: SubtitleCue[] =
+          res.cues.length > 0
+            ? res.cues
+            : [{ index: 1, startMs: 0, endMs: Math.max(1, info.durationMs), text: segText }]
+        return { audio: res.audio, info, cues }
+      }
+
+      const audio = await options.tts(
+        {
+          text: segText,
+          voice: spec.voice,
+          rate: spec.rate,
+          pitch: spec.pitch,
+          ...pronOpt,
+        },
+        { proxyUrl: cfg.proxyUrl },
+        cfg.timeoutMs,
+        signal,
+      )
+      const info = inspectMp3Buffer(audio)
+      return {
+        audio,
+        info,
+        cues: [{ index: 1, startMs: 0, endMs: Math.max(1, info.durationMs), text: segText }],
+      }
+    }
+
+    if (cfg.ttsBaseUrl === '') {
+      throw new VoiceStudioError('未配置 TTS 接口地址（ttsBaseUrl）。', 400, 'config')
+    }
+    if (cfg.ttsApiKey === '' && !isLoopbackBaseUrl(cfg.ttsBaseUrl)) {
+      throw new VoiceStudioError('未配置 TTS 密钥（ttsApiKey）。', 400, 'config')
+    }
+    const hasRefs = Array.isArray(spec.references) && spec.references.length > 0
+    if (spec.voice.trim() === '' && !hasRefs) {
+      throw new VoiceStudioError('音色 ID 不能为空。', 400)
+    }
+    const spokenText = pronunciations.length > 0 ? applyPronunciationsPlain(segText, pronunciations) : segText
+    const openaiFn = options.openaiTts ?? synthesizeOpenAiSpeech
+    const audio = await openaiFn(
+      cfg.ttsBaseUrl,
+      cfg.ttsApiKey,
+      {
+        text: spokenText,
+        voice: spec.voice,
+        model: cfg.ttsModel !== '' ? cfg.ttsModel : 'gpt-4o-mini-tts',
+        speed: rateToSpeed(spec.rate),
+        ...(spec.instructions ? { instructions: spec.instructions } : {}),
+        ...(hasRefs ? { references: spec.references } : {}),
+        signal,
+      },
+      getProxyFetch(cfg.proxyUrl) ?? globalThis.fetch,
+      cfg.timeoutMs,
+      signal,
+    )
+    const info = inspectMp3Buffer(audio)
+    return {
+      audio,
+      info,
+      cues: [{ index: 1, startMs: 0, endMs: Math.max(1, info.durationMs), text: segText }],
+    }
+  }
 
   const snapshot = () => {
     const cfg = readCfg()
@@ -413,113 +740,25 @@ export function createVoiceStudioBackend(
         throw new VoiceStudioError(`试听文本不能超过 ${MAX_PREVIEW_CHARS} 个字符。`, 400, 'textTooLong')
       }
 
-      const rawVoice = text(args, 'voice') || undefined
-      const rawPersona = text(args, 'persona') || undefined
-      const rawRate = text(args, 'rate') || undefined
-      const rawPitch = text(args, 'pitch') || undefined
-      const rawInstructions = text(args, 'instructions') || undefined
-
-      let customAlias: CustomVoiceAlias | undefined
-      let voiceConsumedAsAlias = false
-      let personaConsumedAsAlias = false
-
-      if (rawPersona !== undefined) {
-        customAlias = resolveCustomVoice(cfg.customVoices, rawPersona)
-        if (customAlias !== undefined) personaConsumedAsAlias = true
-      }
-      if (customAlias === undefined && rawVoice !== undefined) {
-        customAlias = resolveCustomVoice(cfg.customVoices, rawVoice)
-        if (customAlias !== undefined) voiceConsumedAsAlias = true
-      }
-
-      let defaultAlias: CustomVoiceAlias | undefined
-      if (rawVoice === undefined && rawPersona === undefined) {
-        defaultAlias = resolveCustomVoice(cfg.customVoices, cfg.ttsVoice)
-      }
-      const activeAlias = customAlias ?? defaultAlias
-
-      let voiceConsumedAsPersona = false
-      let personaSpec = !personaConsumedAsAlias && rawPersona !== undefined ? resolvePersona(rawPersona) : undefined
-      if (personaSpec === undefined && activeAlias?.persona !== undefined) {
-        personaSpec = resolvePersona(activeAlias.persona)
-      }
-      if (personaSpec === undefined && !voiceConsumedAsAlias && rawVoice !== undefined && !isValidVoiceId(rawVoice)) {
-        personaSpec = resolvePersona(rawVoice)
-        if (personaSpec !== undefined) voiceConsumedAsPersona = true
-      }
-
-      let defaultPersona: ReturnType<typeof resolvePersona>
-      if (rawVoice === undefined && rawPersona === undefined && activeAlias === undefined && !isValidVoiceId(cfg.ttsVoice)) {
-        defaultPersona = resolvePersona(cfg.ttsVoice)
-      }
-      const activePersona = personaSpec ?? defaultPersona
-
-      const explicitRawVoice = !voiceConsumedAsAlias && !voiceConsumedAsPersona ? rawVoice : undefined
-      const resolvedVoice = explicitRawVoice ?? activeAlias?.voice ?? activePersona?.voice ?? cfg.ttsVoice
-      const resolvedRate = rawRate ?? activeAlias?.rate ?? activePersona?.rate ?? cfg.ttsRate
-      const resolvedPitch = rawPitch ?? activeAlias?.pitch ?? activePersona?.pitch ?? cfg.ttsPitch
-      const resolvedInstructions = rawInstructions ?? activeAlias?.instructions
-
-      if (!isValidProsody(resolvedRate)) {
-        throw new VoiceStudioError('语速格式不合法（如 +0%、+15%、-10%）。', 400)
-      }
-      if (!isValidProsody(resolvedPitch)) {
-        throw new VoiceStudioError('音调格式不合法（如 +0Hz、+2Hz、-1st）。', 400)
-      }
-
-      const useEdge =
-        options.tts !== undefined
-          ? true
-          : options.openaiTts !== undefined && cfg.ttsEngine !== 'edge'
-            ? false
-            : cfg.ttsEngine === 'edge'
-
+      const cwd = getWorkspaceDir()
+      const useEdge = resolveUseEdge(cfg)
+      const spec = resolveStudioVoice(cfg, useEdge, cwd, {
+        voice: text(args, 'voice') || undefined,
+        persona: text(args, 'persona') || undefined,
+        rate: text(args, 'rate') || undefined,
+        pitch: text(args, 'pitch') || undefined,
+        instructions: text(args, 'instructions') || undefined,
+      })
       const pronunciations = readPronunciations(cfg)
-      let audio: Buffer
+      const { audio, info, cues } = await synthesizeSegmentWithCues(
+        cfg,
+        useEdge,
+        previewText,
+        spec,
+        pronunciations,
+        signal,
+      )
 
-      if (useEdge) {
-        if (!isValidVoiceId(resolvedVoice)) {
-          throw new VoiceStudioError('音色 ID 不合法：' + resolvedVoice, 400)
-        }
-        const ttsFn = options.tts ?? synthesizeSpeech
-        const ttsOpts = {
-          text: previewText,
-          voice: resolvedVoice,
-          rate: resolvedRate,
-          pitch: resolvedPitch,
-          ...(pronunciations.length > 0 ? { pronunciations } : {}),
-        }
-        audio = await ttsFn(ttsOpts, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal)
-      } else {
-        if (cfg.ttsBaseUrl === '') {
-          throw new VoiceStudioError('未配置 TTS 接口地址（ttsBaseUrl）。', 400, 'config')
-        }
-        if (cfg.ttsApiKey === '' && !isLoopbackBaseUrl(cfg.ttsBaseUrl)) {
-          throw new VoiceStudioError('未配置 TTS 密钥（ttsApiKey）。', 400, 'config')
-        }
-        if (resolvedVoice.trim() === '') {
-          throw new VoiceStudioError('音色 ID 不能为空。', 400)
-        }
-        const spokenText = pronunciations.length > 0 ? applyPronunciationsPlain(previewText, pronunciations) : previewText
-        const openaiFn = options.openaiTts ?? synthesizeOpenAiSpeech
-        audio = await openaiFn(
-          cfg.ttsBaseUrl,
-          cfg.ttsApiKey,
-          {
-            text: spokenText,
-            voice: resolvedVoice,
-            model: cfg.ttsModel !== '' ? cfg.ttsModel : 'gpt-4o-mini-tts',
-            speed: rateToSpeed(resolvedRate),
-            ...(resolvedInstructions ? { instructions: resolvedInstructions } : {}),
-            signal,
-          },
-          getProxyFetch(cfg.proxyUrl) ?? globalThis.fetch,
-          cfg.timeoutMs,
-          signal,
-        )
-      }
-
-      const info = inspectMp3Buffer(audio)
       return {
         preview: {
           audioBase64: audio.toString('base64'),
@@ -527,24 +766,14 @@ export function createVoiceStudioBackend(
           bytes: audio.length,
           durationMs: info.durationMs,
           durationSec: Math.round(info.durationMs / 100) / 10,
-          voice: resolvedVoice,
+          voice: spec.displayVoice,
+          cues,
         },
       }
     }
 
     if (action === 'transcribeMic') {
-      const rawB64 = typeof args.audioBase64 === 'string' ? args.audioBase64.trim() : ''
-      const cleanedB64 = rawB64.replace(/^data:[^;]+;base64,/i, '')
-      if (!cleanedB64) {
-        throw new VoiceStudioError('请提供录音音频数据（audioBase64）。', 400)
-      }
-      const audioBuf = Buffer.from(cleanedB64, 'base64')
-      if (audioBuf.length === 0) {
-        throw new VoiceStudioError('录音音频数据为空或格式无效。', 400)
-      }
-      if (audioBuf.length > MAX_AUDIO_BYTES) {
-        throw new VoiceStudioError('录音音频超过 10 MiB 上限。', 413, 'bodyLarge')
-      }
+      const audioBuf = decodeAudioBase64(args.audioBase64, '录音音频')
 
       const rawFilename = text(args, 'filename')
       const filename = (rawFilename || 'mic-recording.webm').replace(/[/\\]/g, '_')
@@ -573,6 +802,427 @@ export function createVoiceStudioBackend(
           text: res.text,
           ...(res.language !== undefined ? { language: res.language } : {}),
           ...(res.duration !== undefined ? { duration: res.duration } : {}),
+        },
+      }
+    }
+
+    if (action === 'saveCloneVoice') {
+      const aliasName = text(args, 'aliasName')
+      if (!aliasName) {
+        throw new VoiceStudioError('克隆角色名称（aliasName）不能为空。', 400)
+      }
+      if (aliasName.length > 64) {
+        throw new VoiceStudioError('克隆角色名称不能超过 64 个字符。', 400)
+      }
+      if (/[/\\:\0]/.test(aliasName) || aliasName === '.' || aliasName === '..' || aliasName.includes('..')) {
+        throw new VoiceStudioError('克隆角色名称包含非法路径字符。', 400, 'pathTraversal')
+      }
+
+      const rawFilename = text(args, 'filename')
+      if (rawFilename && (/[/\\:\0]/.test(rawFilename) || rawFilename.includes('..'))) {
+        throw new VoiceStudioError('录音文件名包含非法路径字符。', 400, 'pathTraversal')
+      }
+
+      const shouldSaveAlias = args.saveAlias !== false
+      if (shouldSaveAlias && (!writable() || typeof options.updateSettings !== 'function')) {
+        throw new VoiceStudioError('当前配置是只读的，无法保存克隆角色。', 403, 'readonly')
+      }
+
+      const audioBuf = decodeAudioBase64(args.audioBase64, '克隆样本音频')
+      const cwd = getWorkspaceDir()
+      const cloneDir = ensureWorkspaceDirectory('voice_clones', cwd)
+
+      const rawExt = rawFilename ? extname(rawFilename).toLowerCase() : ''
+      const safeExt = ALLOWED_CLONE_EXTS.has(rawExt) ? rawExt : '.webm'
+      const safeSlug =
+        aliasName
+          .normalize('NFKC')
+          .replace(/[^\p{L}\p{N}_-]+/gu, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-|-$/g, '')
+          .toLowerCase()
+          .slice(0, 40) || 'voice'
+      const baseName = `clone-${safeSlug}${safeExt}`
+      const targetPath = resolveOutputPath(join(cloneDir, baseName), '', cfg.overwrite, cwd)
+      const writtenPath = writeWorkspaceFile(targetPath, audioBuf, cwd, undefined, cfg.overwrite)
+      const relAudioPath = toWorkspaceRelativePath(writtenPath, cwd)
+
+      let refText = text(args, 'referenceText')
+      let transcribeWarning = ''
+      if (refText === '' && args.autoTranscribe !== false) {
+        const asrReady =
+          options.stt !== undefined ||
+          (cfg.asrBaseUrl !== '' &&
+            (cfg.asrApiKey !== '' || (cfg.asrEngine === 'custom' && isLoopbackBaseUrl(cfg.asrBaseUrl))))
+        if (asrReady) {
+          try {
+            const sttFn = options.stt ?? transcribe
+            const language = text(args, 'language') || undefined
+            const sttRes = await sttFn(
+              cfg.asrBaseUrl,
+              cfg.asrApiKey,
+              {
+                audio: audioBuf,
+                filename: baseName,
+                model: cfg.asrModel !== '' ? cfg.asrModel : 'whisper-1',
+                ...(language ? { language } : {}),
+                allowEmptyApiKey: cfg.asrEngine === 'custom' && isLoopbackBaseUrl(cfg.asrBaseUrl),
+                signal,
+              },
+              getProxyFetch(cfg.proxyUrl) ?? globalThis.fetch,
+              cfg.timeoutMs,
+              signal,
+            )
+            signal.throwIfAborted()
+            if (typeof sttRes?.text === 'string' && sttRes.text.trim() !== '') {
+              refText = sttRes.text.trim()
+            }
+          } catch (error) {
+            signal.throwIfAborted()
+            transcribeWarning = error instanceof Error ? error.message : String(error)
+          }
+        }
+      }
+
+      if (shouldSaveAlias) {
+        const voiceOpt = text(args, 'voice')
+        const personaOpt = text(args, 'persona')
+        const entry: CustomVoiceAlias = {
+          name: aliasName,
+          referenceAudio: relAudioPath,
+          ...(refText ? { referenceText: refText } : {}),
+          ...(voiceOpt ? { voice: voiceOpt } : {}),
+          ...(personaOpt ? { persona: personaOpt } : {}),
+        }
+        const existing = Array.isArray(cfg.customVoices) ? cfg.customVoices : []
+        const lower = aliasName.toLowerCase()
+        const existingIdx = existing.findIndex((item) => item.name.trim().toLowerCase() === lower)
+        const next =
+          existingIdx >= 0
+            ? existing.map((item, idx) => (idx === existingIdx ? entry : item))
+            : [...existing, entry]
+        await options.updateSettings!({ customVoices: next })
+      }
+
+      return {
+        clone: {
+          name: aliasName,
+          referenceAudio: relAudioPath,
+          referenceText: refText,
+          bytes: audioBuf.length,
+          savedAlias: shouldSaveAlias,
+          ...(transcribeWarning ? { transcribeWarning } : {}),
+        },
+      }
+    }
+
+    if (action === 'synthesizeDialogue') {
+      if (!Array.isArray(args.segments) || args.segments.length === 0) {
+        throw new VoiceStudioError('请提供至少 1 段对话台词（segments）。', 400)
+      }
+      if (args.segments.length > MAX_DIALOGUE_SEGMENTS) {
+        throw new VoiceStudioError(`单次对话合成最多支持 ${MAX_DIALOGUE_SEGMENTS} 段台词。`, 400)
+      }
+
+      const rawOutputName = text(args, 'outputName')
+      if (rawOutputName && (/[/\\:\0]/.test(rawOutputName) || rawOutputName.includes('..'))) {
+        throw new VoiceStudioError('输出文件名包含非法路径字符。', 400, 'pathTraversal')
+      }
+
+      const cwd = getWorkspaceDir()
+      const bgmFile = text(args, 'bgmFile')
+      let bgmPath: string | undefined
+      if (bgmFile !== '') {
+        bgmPath = assertAudioFile(bgmFile, cwd)
+        if (!hasFfmpeg()) {
+          throw new VoiceStudioError('使用背景音乐混音需要本机安装 ffmpeg。', 400, 'ffmpegRequired')
+        }
+      }
+
+      interface DialogueSegInput {
+        speaker?: string
+        voice?: string
+        persona?: string
+        text: string
+        rate?: string
+        pitch?: string
+        pauseMs?: number
+        instructions?: string
+      }
+
+      const parsedSegments: DialogueSegInput[] = []
+      let totalChars = 0
+      for (let i = 0; i < args.segments.length; i++) {
+        const seg = record(args.segments[i])
+        const segText = text(seg, 'text')
+        if (!segText) {
+          throw new VoiceStudioError(`segments[${i}].text 不能为空。`, 400)
+        }
+        totalChars += segText.length
+        const rawPause = seg.pauseMs
+        const pauseMs =
+          typeof rawPause === 'number' && Number.isFinite(rawPause)
+            ? Math.min(5000, Math.max(0, Math.round(rawPause)))
+            : undefined
+        parsedSegments.push({
+          speaker: text(seg, 'speaker') || undefined,
+          voice: text(seg, 'voice') || undefined,
+          persona: text(seg, 'persona') || undefined,
+          text: segText,
+          rate: text(seg, 'rate') || undefined,
+          pitch: text(seg, 'pitch') || undefined,
+          pauseMs,
+          instructions: text(seg, 'instructions') || undefined,
+        })
+      }
+
+      if (totalChars > MAX_DIALOGUE_CHARS) {
+        throw new VoiceStudioError(`对话总字数不能超过 ${MAX_DIALOGUE_CHARS} 个字符。`, 400, 'textTooLong')
+      }
+
+      const useEdge = resolveUseEdge(cfg)
+      const pronunciations = readPronunciations(cfg)
+      const refAudioCache = new Map<string, Buffer>()
+      const buffers: Buffer[] = []
+      const allCues: SubtitleCue[] = []
+      let offsetMs = 0
+
+      for (let i = 0; i < parsedSegments.length; i++) {
+        signal.throwIfAborted()
+        const seg = parsedSegments[i]
+        const spec = resolveStudioVoice(
+          cfg,
+          useEdge,
+          cwd,
+          {
+            voice: seg.voice,
+            persona: seg.persona,
+            speakerAlias: seg.speaker,
+            rate: seg.rate,
+            pitch: seg.pitch,
+            pauseMs: seg.pauseMs,
+            instructions: seg.instructions,
+          },
+          refAudioCache,
+        )
+        const { audio: segAudio, info: segInfo, cues: segCues } = await synthesizeSegmentWithCues(
+          cfg,
+          useEdge,
+          seg.text,
+          spec,
+          pronunciations,
+          signal,
+        )
+        signal.throwIfAborted()
+
+        const prefixedCues: SubtitleCue[] = seg.speaker
+          ? segCues.map((cue) => ({ ...cue, text: `[${seg.speaker}] ${cue.text}` }))
+          : segCues
+        allCues.push(...offsetCues(prefixedCues, offsetMs, allCues.length + 1))
+        buffers.push(segAudio)
+        offsetMs += segInfo.durationMs
+
+        if (i < parsedSegments.length - 1 && spec.pauseMs > 0) {
+          const silenceBuf = createSilenceMp3(spec.pauseMs, segInfo.sampleRate || 24000)
+          if (silenceBuf.length > 0) {
+            buffers.push(silenceBuf)
+            offsetMs += inspectMp3Buffer(silenceBuf).durationMs
+          }
+        }
+      }
+
+      let finalAudio = concatMp3Buffers(buffers)
+      if (bgmPath !== undefined) {
+        const rawVol = typeof args.bgmVolume === 'number' ? args.bgmVolume : Number(args.bgmVolume)
+        const bgmVolume = Number.isFinite(rawVol) ? Math.min(1.0, Math.max(0.02, rawVol)) : 0.18
+        finalAudio = await mixAudioWithBgm(
+          finalAudio,
+          {
+            bgmPath,
+            bgmVolume,
+            ducking: true,
+            normalizeLoudness: args.normalizeLoudness === true,
+          },
+          signal,
+        )
+      } else if (args.normalizeLoudness === true && hasFfmpeg()) {
+        finalAudio = await normalizeAudioLoudness(finalAudio, signal)
+      }
+
+      let savedMp3 = ''
+      let savedSubtitle = ''
+      if (args.saveToWorkspace === true) {
+        const outDir = ensureWorkspaceDirectory('voice_outputs', cwd)
+        const rawStem = rawOutputName ? rawOutputName.replace(/\.(mp3|srt|vtt)$/i, '').trim() : ''
+        const safeStem =
+          (rawStem || `dialogue-${Date.now()}`)
+            .normalize('NFKC')
+            .replace(/[^\p{L}\p{N}._-]+/gu, '-')
+            .replace(/-+/g, '-')
+            .replace(/^[.-]+|[.-]+$/g, '')
+            .slice(0, 64) || `dialogue-${Date.now()}`
+        const mp3Target = resolveOutputPath(join(outDir, `${safeStem}.mp3`), '', cfg.overwrite, cwd)
+        const writtenMp3 = writeWorkspaceFile(mp3Target, finalAudio, cwd, undefined, cfg.overwrite)
+        const srtCandidate = join(dirname(writtenMp3), basename(writtenMp3, extname(writtenMp3)) + '.srt')
+        const srtTarget = resolveOutputPath(srtCandidate, '', cfg.overwrite, cwd)
+        const writtenSrt = writeWorkspaceFile(srtTarget, formatSubtitles(allCues, 'srt'), cwd, undefined, cfg.overwrite)
+        savedMp3 = toWorkspaceRelativePath(writtenMp3, cwd)
+        savedSubtitle = toWorkspaceRelativePath(writtenSrt, cwd)
+      }
+
+      const info = inspectMp3Buffer(finalAudio)
+      return {
+        synthesis: {
+          audioBase64: finalAudio.toString('base64'),
+          mime: 'audio/mpeg',
+          bytes: finalAudio.length,
+          durationMs: info.durationMs,
+          durationSec: Math.round(info.durationMs / 100) / 10,
+          cues: allCues,
+          ...(savedMp3 ? { savedMp3, savedSubtitle } : {}),
+        },
+      }
+    }
+
+    if (action === 'workspaceLibrary') {
+      const cwd = getWorkspaceDir()
+      const root = resolveWorkspaceRoot(cwd)
+      const items: Array<{
+        path: string
+        name: string
+        bytes: number
+        mtimeMs: number
+        subtitlePath?: string
+      }> = []
+
+      for (const relDir of LIBRARY_SUBDIRS) {
+        const dirPath = relDir === '' ? root : join(root, relDir)
+        let realDir: string
+        try {
+          const dirStat = lstatSync(dirPath)
+          if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) continue
+          realDir = realpathSync(dirPath)
+          if (!isInsideRoot(root, realDir)) continue
+        } catch {
+          continue
+        }
+
+        let entries
+        try {
+          entries = readdirSync(realDir, { withFileTypes: true })
+        } catch {
+          continue
+        }
+
+        for (const entry of entries) {
+          if (entry.isSymbolicLink() || !entry.isFile()) continue
+          const ext = extname(entry.name).toLowerCase()
+          if (!LIBRARY_AUDIO_EXTS.has(ext)) continue
+
+          const candidateAudio = join(realDir, entry.name)
+          let verifiedAudio: string
+          let st
+          try {
+            verifiedAudio = assertAudioFile(candidateAudio, cwd)
+            st = statSync(verifiedAudio)
+          } catch {
+            continue
+          }
+          if (!st.isFile() || st.size <= 0) continue
+
+          const relAudio = toWorkspaceRelativePath(verifiedAudio, cwd)
+          const stem = basename(entry.name, extname(entry.name))
+          let subtitlePath: string | undefined
+          for (const subExt of ['.srt', '.vtt']) {
+            const subCandidate = join(realDir, stem + subExt)
+            try {
+              const subStat = lstatSync(subCandidate)
+              if (subStat.isSymbolicLink() || !subStat.isFile()) continue
+              const realSub = realpathSync(subCandidate)
+              if (!isInsideRoot(root, realSub)) continue
+              subtitlePath = relative(root, realSub).replace(/\\/g, '/')
+              break
+            } catch {
+              // 无同名陪伴字幕
+            }
+          }
+
+          items.push({
+            path: relAudio,
+            name: entry.name,
+            bytes: st.size,
+            mtimeMs: Math.round(st.mtimeMs),
+            ...(subtitlePath ? { subtitlePath } : {}),
+          })
+        }
+      }
+
+      items.sort((a, b) => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path))
+      return { items: items.slice(0, MAX_LIBRARY_ITEMS) }
+    }
+
+    if (action === 'loadWorkspaceMedia') {
+      const rawPath = text(args, 'path')
+      if (!rawPath) {
+        throw new VoiceStudioError('请提供要加载的音频文件路径（path）。', 400)
+      }
+      const cwd = getWorkspaceDir()
+      const root = resolveWorkspaceRoot(cwd)
+      const audioPath = assertAudioFile(rawPath, cwd)
+      const ext = extname(audioPath).toLowerCase()
+      if (!LIBRARY_AUDIO_EXTS.has(ext)) {
+        throw new VoiceStudioError('仅支持加载工作区内的音频文件（.mp3/.wav/.m4a/.ogg/.webm/.flac）。', 400)
+      }
+
+      const st = statSync(audioPath)
+      if (st.size <= 0) {
+        throw new VoiceStudioError('音频文件为空。', 400)
+      }
+      if (st.size > MAX_MEDIA_BYTES) {
+        throw new VoiceStudioError('工作区音频文件超过 15 MiB 在线预览上限。', 413, 'bodyLarge')
+      }
+
+      const buf = readFileSync(audioPath)
+      if (buf.length > MAX_MEDIA_BYTES) {
+        throw new VoiceStudioError('工作区音频文件超过 15 MiB 在线预览上限。', 413, 'bodyLarge')
+      }
+
+      let cues: SubtitleCue[] = []
+      const audioDir = dirname(audioPath)
+      const stem = basename(audioPath, extname(audioPath))
+      for (const subExt of ['.srt', '.vtt']) {
+        const subCandidate = join(audioDir, stem + subExt)
+        try {
+          const subStat = lstatSync(subCandidate)
+          if (subStat.isSymbolicLink() || !subStat.isFile() || subStat.size > 2 * 1024 * 1024) continue
+          const realSub = realpathSync(subCandidate)
+          if (!isInsideRoot(root, realSub)) continue
+          cues = parseSubtitleFile(readFileSync(realSub, 'utf8'))
+          break
+        } catch {
+          // 忽略不存在或不可读的字幕文件
+        }
+      }
+
+      let durationMs = 0
+      if (ext === '.mp3') {
+        durationMs = inspectMp3Buffer(buf).durationMs
+      } else if (cues.length > 0) {
+        durationMs = cues[cues.length - 1].endMs
+      }
+      const durationSec = Math.round(durationMs / 100) / 10
+      const relPath = toWorkspaceRelativePath(audioPath, cwd)
+
+      return {
+        media: {
+          path: relPath,
+          name: basename(audioPath),
+          mime: audioMimeFromExt(ext),
+          audioBase64: buf.toString('base64'),
+          bytes: buf.length,
+          durationMs,
+          durationSec,
+          cues,
         },
       }
     }

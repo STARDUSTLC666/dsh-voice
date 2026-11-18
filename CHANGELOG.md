@@ -1,5 +1,18 @@
 # 更新记录
 
+## 0.10.0 (2026-11-18)
+
+- 短视频逐词/短句字幕与 `.ass` 卡拉 OK 高亮导出：`voice_tts` 新增 `subtitleGranularity`（`sentence` / `clause` / `word`）与 `maxCharsPerCue`（默认 `16`），支持导出 `1080×1920` SubStation Alpha `.ass` 字幕（含 `\kf` 逐词卡拉 OK 时间轴），可直接配合 `dsh-ffmpeg` 烧录竖屏花字。
+- Short-video clause/word subtitles & `.ass` karaoke export: add `subtitleGranularity` (`sentence` / `clause` / `word`) and `maxCharsPerCue` (default `16`) to `voice_tts`, with `1080×1920` SubStation Alpha `.ass` output emitting `\kf` word-level karaoke timing ready for `dsh-ffmpeg` burn-in.
+- 内联停顿标签与英文词边界发音保护：台词内支持 `[pause:500ms]` / `[break:600ms]` / `[停顿0.6s]` 导演级气口标记（Edge 编译为 SSML `<break>`，OpenAI/SiliconFlow 拼接同采样率静音帧，导出字幕自动剔除标记）；`pronunciations` 新增 ASCII 词边界保护，确保 `OS`、`UI`、`SQL` 等缩写绝不误伤 `POST`、`BUILD` 等单词子串。
+- Inline speech pause tags & word-boundary-safe pronunciation lexicon: compile inline `[pause:500ms]` / `[break:600ms]` / `[停顿0.6s]` markers to SSML `<break>` on Edge and matched-sample-rate silence frames on OpenAI/SiliconFlow (automatically stripped from subtitles), and add ASCII word-boundary protection to `pronunciations` so short acronyms like `OS`, `UI`, and `SQL` never corrupt substrings inside `POST` or `BUILD`.
+- 有声书/播客自动分章与原生 MP3 `CHAP`/`CTOC` 书签嵌入：多级标题 Markdown 文稿（`inputFile`）或带 `title` 的分段播客（`segments[]`）自动写入纯 TypeScript 生成的 ID3v2.3 `CHAP`/`CTOC` 章节书签，并支持 `chaptersOutput` 导出 `.md` 节目时间轴或 `.json` 章节清单。
+- Audiobook/podcast auto-chapters & native MP3 `CHAP`/`CTOC` bookmarks: automatically embed pure-TS ID3v2.3 `CHAP`/`CTOC` chapter tags from multi-heading Markdown (`inputFile`) or titled `segments[]`, with optional `chaptersOutput` (`.md` show-notes timestamps or `.json`).
+- 视频文件直传转写、零漂移 `atempo` 字幕配音、VBR 拼接修复与 Edge 热连接池：`voice_stt` 支持直接传入 `.mp4`/`.mkv`/`.mov`/`.avi` 视频容器自动调用本机 FFmpeg `-vn` 抽取 16kHz 单声道音频转写；`subtitleInput` 在超密台词加速后仍超窗时启用 FFmpeg `atempo` 保调精压实现零累积漂移；修复多段 VBR MP3 拼接残留首段 `Xing`/`Info`/`VBRI` 帧头锁死进度条的问题；Edge TTS 新增 WebSocket 保活连接池（`closeEdgeConnectionPool`）与瞬时断连自动重试。
+- Direct video container STT, zero-drift `atempo` dubbing, VBR concat fix & Edge keep-alive WSS pool: auto-extract `-vn` 16kHz mono audio from `.mp4`/`.mkv`/`.mov`/`.avi` in `voice_stt`; add FFmpeg `atempo` pitch-preserving window fitting on dense `subtitleInput` cues; strip stale `Xing`/`Info`/`VBRI` metadata frames on multi-segment VBR MP3 concatenation; and add an Edge TTS keep-alive WebSocket pool (`closeEdgeConnectionPool`) with transient retry.
+- Voice Studio 侧边栏「真·创作闭环」升级：新增「8 秒录音一键生成克隆角色」（`saveCloneVoice` 落盘 `voice_clones/` + 自动 ASR 转写参考台词 + 自动注册 `customVoices`）、可视化多角色对话合成器（`synthesizeDialogue` 面板内直接生成 MP3 与同步字幕）、第 5 标签页「工作区成品库」（`workspaceLibrary` / `loadWorkspaceMedia`）以及顶栏点击跳播的同步字幕跟读播放器与音频下载按钮。
+- Voice Studio workbench "True Creative Loop": add 8-second 1-click mic voice clone creation (`saveCloneVoice` -> `voice_clones/` + auto-ASR + `customVoices`), visual multi-speaker dialogue synthesis (`synthesizeDialogue`), the 5th **Workspace Library** tab (`workspaceLibrary` / `loadWorkspaceMedia`), and an interactive click-to-seek synchronized subtitle follow-along player bar with direct audio download.
+
 ## 0.9.1 (2026-11-18)
 
 - 运行时技能自动挂载与设置回退 ID 对齐：`apply` 通过 `ctx.inject(['skills'])` 将随包 `voice-workflow` 技能自动注册进宿主运行时技能表（支持 `effect`/`dispose` 热卸载）；Voice Studio 面板在缺少 `fiber` 元信息时的设置更新目标 ID 对齐 `cordis.patch.yml` 的 `'voice'`，并严格遵守宿主 `settings.writable` 只读状态。

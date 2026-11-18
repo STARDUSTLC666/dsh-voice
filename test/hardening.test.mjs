@@ -206,7 +206,7 @@ test('voice_health：asrEngine=custom 缺 asrBaseUrl 必须不通过且点名 as
 test('工具参数 schema：engine 有 enum、voices 有 items', () => {
   const tools = buildVoiceTools(resolveConfig({}))
   const stt = tools.find((t) => t.name === 'voice_stt')
-  assert.deepEqual(stt.parameters.properties.engine.enum, ['groq', 'openai', 'custom'])
+  assert.deepEqual(stt.parameters.properties.engine.enum, ['groq', 'openai', 'siliconflow', 'custom'])
   const preview = tools.find((t) => t.name === 'voice_preview')
   assert.deepEqual(preview.parameters.properties.voices.items, { type: 'string' })
 })

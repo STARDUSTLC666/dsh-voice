@@ -12,21 +12,22 @@ window.__ModuleLoader__.load({
 
     const words = {
       title: ['语音工作室', 'Voice Studio'],
-      subtitle: ['音色试听、人设配音、麦克风速记与发音词典工作台。', 'Audition voices, design personas, transcribe mic memos, and tune pronunciations.'],
+      subtitle: ['音色试听、多角色对话合成、8秒克隆角色、同步字幕跟读与词典工作台。', 'Audition voices, compose multi-speaker dialogues, clone mic voices, and play synced subtitles.'],
       tabVoices: ['音色与人设', 'Voices & Personas'],
-      tabStudio: ['快速试配与播客指令', 'Studio & Prompts'],
-      tabMic: ['麦克风速记与角色', 'Mic & Custom Voices'],
+      tabStudio: ['试配与对话合成', 'Studio & Dialogue'],
+      tabMic: ['麦克风与克隆角色', 'Mic & Clone Voices'],
       tabLexicon: ['发音词典与自检', 'Lexicon & Health'],
+      tabLibrary: ['工作区成品库', 'Workspace Library'],
       refresh: ['刷新状态', 'Refresh'],
       loading: ['正在读取语音工作台…', 'Loading Voice Studio…'],
       retry: ['重新读取', 'Retry'],
       loadError: ['无法连接 Voice Studio。请确认 DSH 仍在运行，然后重试。', 'Cannot load Voice Studio. Check that DSH is running, then retry.'],
       session: ['DSH 会话已失效，请重新打开 DSH 页面。', 'The DSH session has expired. Reopen the DSH page.'],
-      readonly: ['当前配置为只读。你可以试听音色、转写录音并复制对话指令；修改默认设置需可写权限。', 'Settings are read-only. You can still audition voices, transcribe audio, and copy prompts.'],
-      guideSummary: ['使用指南与快捷 AI 配音指令（点击展开）', 'Workflow guide & quick AI voice prompts'],
-      guideStep1: ['1. 选音色/人设：在「音色与人设」搜索或联网加载 300+ Edge 音色，点击 ▶ 试听并可一键设为默认。', '1. Pick a voice/persona: Search or load 300+ Edge voices online, click ▶ to audition, or set as default.'],
-      guideStep2: ['2. 试配与生成指令：在「快速试配」调节语速/音调/情绪并查看精确秒数，或一键复制双人播客 + BGM 自动压低 / .srt 视频配音指令发到对话。', '2. Studio & prompts: Test rate/pitch/instructions with exact duration, or copy dual-host podcast / .srt dubbing prompts into chat.'],
-      guideStep3: ['3. 速记与词典：用浏览器麦克风录音速记转写，或维护专有名词发音词典（如 Nginx → Engine X）。', '3. Mic & lexicon: Record voice memos to transcribe or manage pronunciation overrides (e.g. Nginx → Engine X).'],
+      readonly: ['当前配置为只读。你可以试听音色、合成对话、浏览成品库并转写录音；保存默认设置或克隆别名需可写权限。', 'Settings are read-only. You can still audition voices, synthesize dialogues, play library media, and transcribe audio.'],
+      guideSummary: ['使用指南与真·创作闭环（点击展开）', 'Creative workflow guide & quick AI voice prompts'],
+      guideStep1: ['1. 选音色/跟读试听：在「音色与人设」搜索或联网加载 300+ Edge 音色，点击 ▶ 试听并在顶部字幕条点击任意句跳转跟读。', '1. Pick & follow along: Browse or fetch 300+ Edge voices, click ▶ to preview, and click any subtitle cue in the top player to seek.'],
+      guideStep2: ['2. 多角色台本直出：在「试配与对话合成」直接编排多角色台词、一键合成双人播客试听或保存到 voice_outputs/。', '2. Multi-speaker composer: Arrange multi-role dialogue scripts in Studio and synthesize MP3 + synced cues directly in the panel.'],
+      guideStep3: ['3. 8 秒录音建克隆 & 成品库：在「麦克风与克隆角色」朗读 5–10 秒一键生成克隆角色；在「工作区成品库」随时回放音频与同步字幕。', '3. 8s mic clone & library: Record 5–10s to create a custom voice role in 1 click, and replay workspace audio + .srt/.vtt in Library.'],
       audition: ['试听', 'Preview'],
       auditioning: ['合成中…', 'Synthesizing…'],
       setDefault: ['设为默认音色', 'Set default'],
@@ -106,9 +107,10 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('');
       const [notice, setNotice] = useState('');
 
-      // Audio preview bar state
+      // Audio follow-along player bar state
       const [previewAudio, setPreviewAudio] = useState(null);
       const [playbackRate, setPlaybackRate] = useState('1.0');
+      const [currentTimeMs, setCurrentTimeMs] = useState(0);
       const audioRef = useRef(null);
 
       // Tab 1: Voices & Personas
@@ -119,28 +121,38 @@ window.__ModuleLoader__.load({
       const [voicesList, setVoicesList] = useState(null);
       const [voiceSource, setVoiceSource] = useState('builtin');
 
-      // Tab 2: Studio & Prompt Builders
-      const [studioText, setStudioText] = useState('你好，欢迎来到 DSH 语音工作室！Hello, this is a live audition.');
+      // Tab 2: Studio, Visual Multi-Speaker Dialogue Composer & Prompt Builders
+      const [studioText, setStudioText] = useState('你好，欢迎来到 DSH 语音工作室！现在试听自带同步字幕跟读与点击跳播。');
       const [studioVoice, setStudioVoice] = useState('');
       const [studioRate, setStudioRate] = useState('+0%');
       const [studioPitch, setStudioPitch] = useState('+0Hz');
       const [studioInstructions, setStudioInstructions] = useState('');
+      const [dialogueLines, setDialogueLines] = useState([
+        { speaker: '女主持', voice: 'podcast-host-female', text: '欢迎收听本期 AI 语音工作台节目！', pauseMs: 300 },
+        { speaker: '男主持', voice: 'podcast-host-male', text: '现在在侧边栏就能直接编排多角色台本、一键合成试听并同步滚动字幕。', pauseMs: 300 },
+      ]);
+      const [saveDialogueToWs, setSaveDialogueToWs] = useState(false);
+      const [dialogueOutName, setDialogueOutName] = useState('');
       const [hostA, setHostA] = useState('podcast-host-female');
       const [hostB, setHostB] = useState('podcast-host-male');
       const [podcastTopic, setPodcastTopic] = useState('本周 AI 开发工具与音频工作流进展');
-      const [bgmFile, setBgmFile] = useState('bgm.mp3');
+      const [bgmFile, setBgmFile] = useState('');
       const [bgmVolume, setBgmVolume] = useState('0.18');
       const [podcastLoudness, setPodcastLoudness] = useState(true);
       const [srtFile, setSrtFile] = useState('video.srt');
       const [dubVoice, setDubVoice] = useState('zh-CN-YunzeNeural');
       const [dubOut, setDubOut] = useState('dubbing.mp3');
 
-      // Tab 3: Mic & Custom Voices
+      // Tab 3: Mic Memo, 8s Direct-to-Clone Creator & Custom Voices
       const [recording, setRecording] = useState(false);
+      const [recordMode, setRecordMode] = useState('');
       const [recordSec, setRecordSec] = useState(0);
       const [micLang, setMicLang] = useState('');
       const [micPrompt, setMicPrompt] = useState('');
       const [transcript, setTranscript] = useState(null);
+      const [cloneAliasName, setCloneAliasName] = useState('我的克隆音色');
+      const [cloneRefText, setCloneRefText] = useState('');
+      const [cloneResult, setCloneResult] = useState(null);
       const [customDraft, setCustomDraft] = useState({
         name: '',
         voice: '',
@@ -155,16 +167,23 @@ window.__ModuleLoader__.load({
       const mediaStreamRef = useRef(null);
       const recordTimerRef = useRef(null);
       const recordChunksRef = useRef([]);
+      const recordModeRef = useRef('');
 
       // Tab 4: Lexicon & Health
       const [lexWord, setLexWord] = useState('');
       const [lexAlias, setLexAlias] = useState('');
 
+      // Tab 5: Workspace Library
+      const [libraryItems, setLibraryItems] = useState([]);
+      const [libraryLoaded, setLibraryLoaded] = useState(false);
+
       const baseId = typeof useId === 'function' ? useId() : 'dsh-voice';
       const tabsId = baseId + '-tabs';
       const controller = useRef(null);
 
-      const hasDirtyDraft = Boolean(customDraft.name.trim() || lexWord.trim() || lexAlias.trim());
+      const hasDirtyDraft = Boolean(
+        customDraft.name.trim() || lexWord.trim() || lexAlias.trim() || cloneRefText.trim(),
+      );
       if (typeof __stardustUpdatesGuard === 'function') {
         __stardustUpdatesGuard(React, 'dsh-voice', {
           dirty: hasDirtyDraft,
@@ -196,13 +215,19 @@ window.__ModuleLoader__.load({
         }
       }, [playbackRate, previewAudio]);
 
+      useEffect(() => {
+        if (activeTab === 'library' && !libraryLoaded && !busy) {
+          void loadLibrary();
+        }
+      }, [activeTab, libraryLoaded]);
+
       async function run(action, args = {}, onSuccess, busyKey) {
         if (controller.current) return;
         const abort = new AbortController();
         controller.current = abort;
         setBusy(busyKey || action || 'load');
         setError('');
-        if (action !== 'preview') setNotice('');
+        if (action !== 'preview' && action !== 'workspaceLibrary') setNotice('');
         try {
           const value = await request(action, args, abort.signal);
           abort.signal.throwIfAborted();
@@ -228,28 +253,118 @@ window.__ModuleLoader__.load({
         }
       }
 
+      function playInPlayerBar(nextAudio, noticeMsg) {
+        setCurrentTimeMs(0);
+        setPreviewAudio(nextAudio);
+        if (noticeMsg) setNotice(noticeMsg);
+        setTimeout(() => {
+          if (audioRef.current) {
+            audioRef.current.currentTime = 0;
+            audioRef.current.playbackRate = Number(playbackRate) || 1;
+            void audioRef.current.play().catch(() => {});
+          }
+        }, 30);
+      }
+
       function triggerPreview(opts, label) {
         const key = 'preview:' + (label || opts.persona || opts.voice || 'studio');
         return run('preview', opts, value => {
           const p = value?.preview;
           if (p?.audioBase64) {
             const url = 'data:' + (p.mime || 'audio/mpeg') + ';base64,' + p.audioBase64;
-            setPreviewAudio({
-              dataUrl: url,
-              voice: p.voice,
-              durationMs: p.durationMs,
-              durationSec: p.durationSec,
-              bytes: p.bytes,
-            });
-            setNotice(`${t('previewReady')}: ${p.voice} (${p.durationSec}s)`);
-            setTimeout(() => {
-              if (audioRef.current) {
-                audioRef.current.playbackRate = Number(playbackRate) || 1;
-                void audioRef.current.play().catch(() => {});
-              }
-            }, 30);
+            const safeFile = String(p.voice || 'voice-studio').replace(/[^a-zA-Z0-9._-]+/g, '-') + '.mp3';
+            playInPlayerBar(
+              {
+                dataUrl: url,
+                voice: p.voice,
+                fileName: safeFile,
+                durationMs: p.durationMs,
+                durationSec: p.durationSec,
+                bytes: p.bytes,
+                cues: Array.isArray(p.cues) ? p.cues : [],
+              },
+              `${t('previewReady')}: ${p.voice} (${p.durationSec}s)`,
+            );
           }
         }, key);
+      }
+
+      function triggerDialogueSynthesis() {
+        const validSegments = dialogueLines
+          .map(line => ({
+            ...(line.speaker && line.speaker.trim() ? { speaker: line.speaker.trim() } : {}),
+            ...(line.voice && line.voice.trim() ? { voice: line.voice.trim() } : {}),
+            text: String(line.text || '').trim(),
+            pauseMs: Number.isFinite(Number(line.pauseMs)) ? Math.max(0, Math.min(5000, Number(line.pauseMs))) : 300,
+          }))
+          .filter(line => line.text !== '');
+        if (validSegments.length === 0) {
+          setError(vText('请至少填写一段非空对话台词。', 'Please enter at least one non-empty dialogue line.'));
+          return;
+        }
+        return run('synthesizeDialogue', {
+          segments: validSegments,
+          ...(bgmFile.trim() ? { bgmFile: bgmFile.trim(), bgmVolume: Number(bgmVolume) || 0.18 } : {}),
+          normalizeLoudness: podcastLoudness,
+          saveToWorkspace: saveDialogueToWs,
+          ...(saveDialogueToWs && dialogueOutName.trim() ? { outputName: dialogueOutName.trim() } : {}),
+        }, value => {
+          const s = value?.synthesis;
+          if (s?.audioBase64) {
+            const url = 'data:' + (s.mime || 'audio/mpeg') + ';base64,' + s.audioBase64;
+            const savedLeaf = s.savedMp3 ? s.savedMp3.split('/').pop() : '';
+            if (s.savedMp3) setLibraryLoaded(false);
+            playInPlayerBar(
+              {
+                dataUrl: url,
+                voice: vText(`多角色对话 (${validSegments.length} 句)`, `Dialogue (${validSegments.length} lines)`),
+                fileName: savedLeaf || 'dialogue-studio.mp3',
+                durationMs: s.durationMs,
+                durationSec: s.durationSec,
+                bytes: s.bytes,
+                cues: Array.isArray(s.cues) ? s.cues : [],
+                savedMp3: s.savedMp3 || '',
+                savedSubtitle: s.savedSubtitle || '',
+              },
+              s.savedMp3
+                ? vText(`多角色对话合成完成 (${s.durationSec}s)，已保存至 ${s.savedMp3}`, `Dialogue synthesized (${s.durationSec}s) & saved to ${s.savedMp3}`)
+                : vText(`多角色对话合成就绪 (${s.durationSec}s)，点击字幕条可逐句跳播`, `Dialogue ready (${s.durationSec}s) — click any cue to seek`),
+            );
+          }
+        }, 'synthesizeDialogue');
+      }
+
+      function loadLibrary() {
+        return run('workspaceLibrary', {}, value => {
+          if (Array.isArray(value?.items)) {
+            setLibraryItems(value.items);
+          }
+          setLibraryLoaded(true);
+        }, 'workspaceLibrary');
+      }
+
+      function playWorkspaceItem(item) {
+        return run('loadWorkspaceMedia', { path: item.path }, value => {
+          const m = value?.media;
+          if (m?.audioBase64) {
+            const url = 'data:' + (m.mime || 'audio/mpeg') + ';base64,' + m.audioBase64;
+            playInPlayerBar(
+              {
+                dataUrl: url,
+                voice: m.name,
+                fileName: m.name,
+                durationMs: m.durationMs,
+                durationSec: m.durationSec,
+                bytes: m.bytes,
+                cues: Array.isArray(m.cues) ? m.cues : [],
+                savedMp3: m.path,
+              },
+              m.cues && m.cues.length > 0
+                ? vText(`正在跟读播放：${m.path}（${m.cues.length} 条同步字幕）`, `Playing ${m.path} (${m.cues.length} synced cues)`)
+                : vText(`正在播放：${m.path}`, `Playing: ${m.path}`),
+            );
+          }
+        }, 'media:' + item.path);
       }
 
       function toggleOnlineVoices(checked) {
@@ -265,9 +380,13 @@ window.__ModuleLoader__.load({
         }, 'voices');
       }
 
-      async function startRecording() {
+      async function startRecording(mode = 'memo') {
         setError('');
         setNotice('');
+        if (mode === 'clone' && !cloneAliasName.trim()) {
+          setError(vText('请先填写克隆角色名称（如：我的克隆音色）。', 'Please enter an alias name for your cloned voice first.'));
+          return;
+        }
         if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
           setError(vText('当前浏览器或环境不支持 MediaRecorder 麦克风录音。', 'MediaRecorder microphone capture is unavailable in this environment.'));
           return;
@@ -281,10 +400,12 @@ window.__ModuleLoader__.load({
             : (MediaRecorder.isTypeSupported?.('audio/webm') ? 'audio/webm' : '');
           const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
           mediaRecorderRef.current = recorder;
+          recordModeRef.current = mode;
           recorder.ondataavailable = ev => {
             if (ev.data && ev.data.size > 0) recordChunksRef.current.push(ev.data);
           };
           recorder.start();
+          setRecordMode(mode);
           setRecording(true);
           setRecordSec(0);
           recordTimerRef.current = setInterval(() => setRecordSec(s => s + 1), 1000);
@@ -293,14 +414,17 @@ window.__ModuleLoader__.load({
         }
       }
 
-      function stopAndTranscribe(cancelOnly = false) {
+      function stopAndProcessRecording(cancelOnly = false) {
         const recorder = mediaRecorderRef.current;
         const stream = mediaStreamRef.current;
+        const mode = recordModeRef.current || recordMode || 'memo';
         if (recordTimerRef.current) {
           clearInterval(recordTimerRef.current);
           recordTimerRef.current = null;
         }
         setRecording(false);
+        setRecordMode('');
+        recordModeRef.current = '';
         if (!recorder) {
           if (stream) for (const track of stream.getTracks()) track.stop();
           mediaStreamRef.current = null;
@@ -318,17 +442,40 @@ window.__ModuleLoader__.load({
           try {
             const blob = new Blob(chunks, { type: mime });
             const dataUrl = await blobToBase64(blob);
-            await run('transcribeMic', {
-              audioBase64: dataUrl,
-              filename: 'mic-memo.' + ext,
-              ...(micLang.trim() ? { language: micLang.trim() } : {}),
-              ...(micPrompt.trim() ? { prompt: micPrompt.trim() } : {}),
-            }, value => {
-              if (value?.transcript) {
-                setTranscript(value.transcript);
-                setNotice(vText('语音速记转写完成', 'Voice memo transcribed'));
-              }
-            }, 'transcribeMic');
+            if (mode === 'clone') {
+              await run('saveCloneVoice', {
+                audioBase64: dataUrl,
+                filename: 'clone-sample.' + ext,
+                aliasName: cloneAliasName.trim(),
+                ...(cloneRefText.trim() ? { referenceText: cloneRefText.trim() } : {}),
+                ...(micLang.trim() ? { language: micLang.trim() } : {}),
+                autoTranscribe: true,
+                saveAlias: writable,
+              }, value => {
+                if (value?.clone) {
+                  setCloneResult(value.clone);
+                  setLibraryLoaded(false);
+                  setNotice(
+                    vText(
+                      `克隆角色「${value.clone.name}」已保存至 ${value.clone.referenceAudio}`,
+                      `Cloned voice "${value.clone.name}" saved to ${value.clone.referenceAudio}`,
+                    ),
+                  );
+                }
+              }, 'saveCloneVoice');
+            } else {
+              await run('transcribeMic', {
+                audioBase64: dataUrl,
+                filename: 'mic-memo.' + ext,
+                ...(micLang.trim() ? { language: micLang.trim() } : {}),
+                ...(micPrompt.trim() ? { prompt: micPrompt.trim() } : {}),
+              }, value => {
+                if (value?.transcript) {
+                  setTranscript(value.transcript);
+                  setNotice(vText('语音速记转写完成', 'Voice memo transcribed'));
+                }
+              }, 'transcribeMic');
+            }
           } catch (err) {
             setError(err?.message || String(err));
           }
@@ -374,20 +521,20 @@ window.__ModuleLoader__.load({
           id: 'voices',
           selector: '#' + tabsId + '-tab-voices',
           side: 'bottom',
-          title: vText('音色库与开箱人设', 'Voices & Personas'),
+          title: vText('音色库与字幕跟读试听', 'Voices & Follow-Along Preview'),
           desc: vText(
-            '浏览 45+ 全年龄与方言音色及 10 套人设，点击 ▶ 即时在线试听，可联网拉取 300+ Edge 音色并一键设为默认。',
-            'Browse 45+ built-in voices & 10 personas, click ▶ for instant audio preview, fetch 300+ online voices, or set default.',
+            '浏览 45+ 全年龄与方言音色及 10 套人设，点击 ▶ 即时在线试听并在顶部字幕条点击任意句跳播。',
+            'Browse 45+ built-in voices & 10 personas, click ▶ for instant preview with click-to-seek subtitles.',
           ),
         },
         {
           id: 'studio',
           selector: '#' + tabsId + '-tab-studio',
           side: 'bottom',
-          title: vText('快速试配与播客 / 视频配音', 'Studio & Prompt Builders'),
+          title: vText('可视化多角色台本与试配台', 'Multi-Speaker Dialogue Composer'),
           desc: vText(
-            '自由调节语速、音调与情绪指令试听并查看精确秒数；还可一键复制双人播客 + BGM 自动压低或 .srt 视频卡点配音指令。',
-            'Test rate, pitch, and instructions with exact duration, or copy dual-host podcast + BGM ducking and .srt dubbing prompts.',
+            '直接在面板编排多角色对话台本、一键合成 MP3 并跟读字幕，或复制完整播客 / .srt 卡点配音指令。',
+            'Compose multi-speaker scripts and synthesize MP3 + synced cues directly, or copy full podcast / .srt prompts.',
           ),
           prompt: podcastPromptText,
           promptLabel: vText('复制：双人播客配音指令', 'Copy: Dual-host podcast prompt'),
@@ -396,10 +543,10 @@ window.__ModuleLoader__.load({
           id: 'mic',
           selector: '#' + tabsId + '-tab-mic',
           side: 'bottom',
-          title: vText('麦克风速记与自定义角色', 'Mic Memo & Custom Voices'),
+          title: vText('8 秒录音一键生成克隆角色', '8-Second Mic Direct-to-Clone'),
           desc: vText(
-            '直接用浏览器麦克风录音并一键转写文字，还可管理可复用的自定义音色别名与参考音频。',
-            'Record voice memos right in your browser for instant transcription, and manage reusable custom voice aliases.',
+            '朗读 5–10 秒即可自动保存样本至 voice_clones/、调用 ASR 提取参考台词并注册为可复用的克隆角色。',
+            'Record 5–10s to save reference audio, auto-transcribe via ASR, and register a reusable custom clone role.',
           ),
         },
         {
@@ -412,35 +559,92 @@ window.__ModuleLoader__.load({
             'Manage pronunciation overrides (e.g. Nginx → Engine X) and inspect live TTS / ASR / FFmpeg readiness.',
           ),
         },
+        {
+          id: 'library',
+          selector: '#' + tabsId + '-tab-library',
+          side: 'bottom',
+          title: vText('工作区音频与同步字幕成品库', 'Workspace Audio & Subtitle Library'),
+          desc: vText(
+            '自动发现工作区生成的音频与同名 .srt/.vtt 字幕，一键开启交互式字幕高亮跟读与点按跳转。',
+            'Browse workspace audio files paired with .srt/.vtt subtitles for instant click-to-seek follow-along playback.',
+          ),
+        },
       ];
 
       function renderVoicePlayerBar() {
         if (!previewAudio) return null;
+        const cues = Array.isArray(previewAudio.cues) ? previewAudio.cues : [];
         return h('div', { className: 'voice-player-bar', 'data-dsh-card': '' },
-          h('div', { className: 'voice-player-meta' },
-            h('strong', null, previewAudio.voice),
-            h('span', { className: 'dsh-wb-tag', 'data-tone': 'success' }, `${previewAudio.durationSec}s · ${Math.round(previewAudio.bytes / 1024)} KB`),
+          h('div', { className: 'voice-player-top' },
+            h('div', { className: 'voice-player-meta' },
+              h('strong', null, previewAudio.voice),
+              h('span', { className: 'dsh-wb-tag', 'data-tone': 'success' },
+                `${previewAudio.durationSec || 0}s · ${Math.max(1, Math.round((previewAudio.bytes || 0) / 1024))} KB`),
+              previewAudio.savedMp3
+                ? h('span', { className: 'voice-mono' }, previewAudio.savedMp3)
+                : null,
+            ),
+            h('div', { className: 'voice-player-controls' },
+              h('audio', {
+                ref: audioRef,
+                controls: true,
+                src: previewAudio.dataUrl,
+                className: 'voice-audio-el',
+                onTimeUpdate: e => setCurrentTimeMs(Math.round((e.currentTarget.currentTime || 0) * 1000)),
+                onSeeked: e => setCurrentTimeMs(Math.round((e.currentTarget.currentTime || 0) * 1000)),
+                onLoadedMetadata: e => setCurrentTimeMs(Math.round((e.currentTarget.currentTime || 0) * 1000)),
+              }),
+              h(W.ChoiceMenu, {
+                label: t('speed'),
+                value: playbackRate,
+                items: [
+                  { id: '0.8', label: '0.8x' },
+                  { id: '1.0', label: '1.0x' },
+                  { id: '1.2', label: '1.2x' },
+                  { id: '1.5', label: '1.5x' },
+                ],
+                onChange: setPlaybackRate,
+                className: 'voice-speed-select',
+              }),
+              h('a', {
+                className: 'dsh-wb-btn dsh-wb-btn-outline voice-download-link',
+                href: previewAudio.dataUrl,
+                download: previewAudio.fileName || 'voice-studio.mp3',
+                title: vText('下载音频', 'Download audio'),
+              },
+                h(W.Icon, { name: 'download', size: 14 }),
+                h('span', null, vText('下载音频', 'Download')),
+              ),
+            ),
           ),
-          h('div', { className: 'voice-player-controls' },
-            h('audio', {
-              ref: audioRef,
-              controls: true,
-              src: previewAudio.dataUrl,
-              className: 'voice-audio-el',
-            }),
-            h(W.ChoiceMenu, {
-              label: t('speed'),
-              value: playbackRate,
-              items: [
-                { id: '0.8', label: '0.8x' },
-                { id: '1.0', label: '1.0x' },
-                { id: '1.2', label: '1.2x' },
-                { id: '1.5', label: '1.5x' },
-              ],
-              onChange: setPlaybackRate,
-              className: 'voice-speed-select',
-            }),
-          ),
+          cues.length > 0
+            ? h('div', {
+                className: 'voice-cue-strip',
+                role: 'list',
+                'aria-label': vText('同步字幕跟读（点击任意句跳转播放）', 'Synchronized subtitles (click any cue to seek)'),
+              },
+                cues.map((cue, idx) => {
+                  const isActive = currentTimeMs >= cue.startMs && currentTimeMs <= cue.endMs;
+                  return h('button', {
+                    key: (cue.index || idx) + '-' + cue.startMs,
+                    type: 'button',
+                    role: 'listitem',
+                    className: 'voice-cue-chip' + (isActive ? ' is-active' : ''),
+                    title: vText('点击跳转到该句播放', 'Click to seek and play this cue'),
+                    onClick: () => {
+                      if (audioRef.current) {
+                        audioRef.current.currentTime = (cue.startMs || 0) / 1000;
+                        setCurrentTimeMs(cue.startMs || 0);
+                        void audioRef.current.play().catch(() => {});
+                      }
+                    },
+                  },
+                    h('span', { className: 'voice-cue-time' }, formatTimer(Math.floor((cue.startMs || 0) / 1000))),
+                    h('span', { className: 'voice-cue-text' }, cue.text),
+                  );
+                }),
+              )
+            : null,
         );
       }
 
@@ -598,10 +802,17 @@ window.__ModuleLoader__.load({
 
       function renderStudioTab() {
         const voiceOptions = [
+          ...customVoices.map(cv => ({ id: cv.name, label: `★ ${cv.name} (${vText('自定义角色', 'Custom')})` })),
           ...personas.map(p => ({ id: p.id, label: `${p.label} (${p.id})` })),
           ...allVoices.slice(0, 45).map(v => ({ id: v.id, label: `${v.id} · ${v.locale}` })),
         ];
+        const ensureOption = val =>
+          voiceOptions.some(o => o.id === val) ? voiceOptions : [{ id: val, label: val }, ...voiceOptions];
         const selectedTarget = studioVoice || state?.ttsVoice || 'zh-CN-XiaoxiaoNeural';
+
+        const updateDialogueLine = (idx, patch) => {
+          setDialogueLines(prev => prev.map((row, i) => (i === idx ? { ...row, ...patch } : row)));
+        };
 
         return h('div', { className: 'voice-section-stack' },
           h('form', {
@@ -619,7 +830,7 @@ window.__ModuleLoader__.load({
             },
           },
             h('div', { className: 'voice-block-head' },
-              h('h3', { 'data-dsh-editorial-heading': '' }, vText('实时参数试配台', 'Live Audition Playground')),
+              h('h3', { 'data-dsh-editorial-heading': '' }, vText('实时参数试配台（含同步字幕跟读）', 'Live Audition Playground')),
               h('span', { className: 'dsh-wb-count' }, `${studioText.length} / 300`),
             ),
             h('textarea', {
@@ -627,18 +838,16 @@ window.__ModuleLoader__.load({
               maxLength: 300,
               value: studioText,
               disabled: !!busy,
-              placeholder: vText('输入最多 300 字试听台词…', 'Enter up to 300 chars to audition…'),
+              placeholder: vText('输入最多 300 字试听台词（支持 [pause:500ms] 内联停顿标签）…', 'Enter up to 300 chars to audition…'),
               onChange: e => setStudioText(e.target.value),
             }),
             h('div', { className: 'voice-form-grid' },
               h('label', { className: 'voice-field' },
-                h('span', null, vText('音色 / 人设 / 别名', 'Voice / Persona / Alias')),
+                h('span', null, vText('音色 / 人设 / 克隆角色', 'Voice / Persona / Clone Alias')),
                 h(W.ChoiceMenu, {
                   label: vText('选择音色或人设', 'Choose voice or persona'),
                   value: selectedTarget,
-                  items: voiceOptions.some(o => o.id === selectedTarget)
-                    ? voiceOptions
-                    : [{ id: selectedTarget, label: selectedTarget }, ...voiceOptions],
+                  items: ensureOption(selectedTarget),
                   onChange: setStudioVoice,
                 }),
               ),
@@ -677,7 +886,7 @@ window.__ModuleLoader__.load({
                 icon: 'play',
                 spinning: busy === 'preview:studio',
                 disabled: !!busy || !studioText.trim(),
-              }, busy === 'preview:studio' ? t('auditioning') : vText('▶ 立即试听并测算时长', '▶ Audition & Measure Duration')),
+              }, busy === 'preview:studio' ? t('auditioning') : vText('▶ 立即试听并跟读测算时长', '▶ Audition & Measure Duration')),
               h(W.CopyPrompt, {
                 prompt: vText(
                   `请用音色/人设「${selectedTarget}」（语速 ${studioRate}，音调 ${studioPitch}${studioInstructions.trim() ? `，情绪指令：${studioInstructions.trim()}` : ''}）合成以下文稿：${studioText}`,
@@ -690,16 +899,125 @@ window.__ModuleLoader__.load({
               }),
             ),
           ),
-          h('div', { className: 'voice-builders-grid' },
-            h('section', { className: 'voice-panel-card', 'data-dsh-card': '' },
-              h('h3', { 'data-dsh-editorial-heading': '' }, vText('双人播客 + BGM 自动压低生成器', 'Dual-Host Podcast + BGM Auto-Ducking')),
+
+          h('section', { className: 'voice-panel-card', 'data-dsh-card': '' },
+            h('div', { className: 'voice-block-head' },
+              h('h3', { 'data-dsh-editorial-heading': '' }, vText('可视化多角色对话编排器 & 双人播客合成', 'Visual Multi-Speaker Dialogue Composer & Podcast')),
+              h('span', { className: 'dsh-wb-count' }, vText(`${dialogueLines.length} / 20 句`, `${dialogueLines.length} / 20 lines`)),
+            ),
+            h('p', { className: 'voice-muted' }, vText(
+              '直接在下方编排多角色台词（支持内置人设、300+ 音色或你录制的克隆角色），一键合成多角色 MP3 并在顶部播放器逐句高亮跟读；也可复制完整节目指令交由 AI 扩写长篇播客。',
+              'Arrange multi-role lines using personas, catalog voices, or your cloned roles, then synthesize MP3 + synced cues right here — or copy the AI prompt for a full episode.',
+            )),
+            h('div', { className: 'voice-dialogue-list' },
+              dialogueLines.map((line, idx) => {
+                const lineVoice = line.voice || state?.ttsVoice || 'podcast-host-female';
+                return h('div', { key: idx, className: 'voice-dialogue-row' },
+                  h('div', { className: 'voice-dialogue-meta' },
+                    h(W.Input, {
+                      value: line.speaker,
+                      disabled: !!busy,
+                      placeholder: vText('角色名（如 女主持）', 'Speaker'),
+                      onChange: e => updateDialogueLine(idx, { speaker: e.target.value }),
+                    }),
+                    h(W.ChoiceMenu, {
+                      label: vText('选择角色音色', 'Speaker voice'),
+                      value: lineVoice,
+                      disabled: !!busy,
+                      items: ensureOption(lineVoice),
+                      onChange: nextVoice => updateDialogueLine(idx, { voice: nextVoice }),
+                    }),
+                    h(W.IconButton, {
+                      icon: 'trash',
+                      label: vText('删除此句', 'Remove line'),
+                      disabled: !!busy || dialogueLines.length <= 1,
+                      onClick: () => setDialogueLines(prev => prev.filter((_, i) => i !== idx)),
+                    }),
+                  ),
+                  h('textarea', {
+                    className: 'dsh-wb-textarea voice-dialogue-input',
+                    rows: 2,
+                    value: line.text,
+                    disabled: !!busy,
+                    placeholder: vText('输入该角色台词…', 'Enter speaker dialogue line…'),
+                    onChange: e => updateDialogueLine(idx, { text: e.target.value }),
+                  }),
+                );
+              }),
+            ),
+            h('div', { className: 'dsh-wb-toolbar' },
+              h(W.Button, {
+                size: 'sm',
+                icon: 'plus',
+                disabled: !!busy || dialogueLines.length >= 20,
+                onClick: () => {
+                  const isEven = dialogueLines.length % 2 === 0;
+                  setDialogueLines(prev => [
+                    ...prev,
+                    {
+                      speaker: isEven ? vText('女主持', 'Host A') : vText('男主持', 'Host B'),
+                      voice: isEven ? (hostA || 'podcast-host-female') : (hostB || 'podcast-host-male'),
+                      text: '',
+                      pauseMs: 300,
+                    },
+                  ]);
+                },
+              }, vText('+ 添加台词', '+ Add Line')),
+              h(W.Checkbox, {
+                label: vText('保存到工作区 voice_outputs/（含 .mp3 + .srt）', 'Save MP3 + .srt to workspace voice_outputs/'),
+                checked: saveDialogueToWs,
+                disabled: !!busy,
+                onChange: setSaveDialogueToWs,
+              }),
+              saveDialogueToWs
+                ? h(W.Input, {
+                    value: dialogueOutName,
+                    disabled: !!busy,
+                    placeholder: vText('文件名（可选，如 episode-1）', 'Output name (optional)'),
+                    className: 'voice-inline-name-input',
+                    onChange: e => setDialogueOutName(e.target.value),
+                  })
+                : null,
+            ),
+            h('div', { className: 'voice-form-grid' },
+              h('label', { className: 'voice-field' },
+                h('span', null, vText('背景音乐 (bgmFile，可选工作区路径)', 'BGM File (optional workspace path)')),
+                h(W.Input, { value: bgmFile, placeholder: 'bgm.mp3', disabled: !!busy, onChange: e => setBgmFile(e.target.value) }),
+              ),
+              h('label', { className: 'voice-field' },
+                h('span', null, vText('背景音量 (0.02-1.0)', 'BGM Volume')),
+                h(W.Input, { value: bgmVolume, placeholder: '0.18', disabled: !!busy, onChange: e => setBgmVolume(e.target.value) }),
+              ),
+            ),
+            h(W.Checkbox, {
+              label: vText('开启 -16 LUFS 播客响度均衡 (normalizeLoudness)', 'Enable -16 LUFS loudness normalization'),
+              checked: podcastLoudness,
+              disabled: !!busy,
+              onChange: setPodcastLoudness,
+            }),
+            h('div', { className: 'dsh-wb-toolbar' },
+              h(W.Button, {
+                variant: 'primary',
+                icon: 'play',
+                spinning: busy === 'synthesizeDialogue',
+                disabled: !!busy,
+                onClick: () => { void triggerDialogueSynthesis(); },
+              }, busy === 'synthesizeDialogue'
+                ? vText('正在合成多角色对话…', 'Synthesizing dialogue…')
+                : vText('▶ 直接合成多角色对话并跟读播放', '▶ Synthesize Multi-Speaker Dialogue & Play')),
+            ),
+
+            h('div', { className: 'voice-subform' },
+              h('div', { className: 'voice-block-head' },
+                h('strong', null, vText('长篇双人播客 AI 扩写指令生成器', 'Full-Episode AI Podcast Prompt Builder')),
+              ),
               h('div', { className: 'voice-form-grid' },
                 h('label', { className: 'voice-field' },
                   h('span', null, vText('主持人 A', 'Host A')),
                   h(W.ChoiceMenu, {
                     label: 'Host A',
                     value: hostA,
-                    items: personas.map(p => ({ id: p.id, label: `${p.label} (${p.id})` })),
+                    items: ensureOption(hostA),
                     onChange: setHostA,
                   }),
                 ),
@@ -708,7 +1026,7 @@ window.__ModuleLoader__.load({
                   h(W.ChoiceMenu, {
                     label: 'Host B',
                     value: hostB,
-                    items: personas.map(p => ({ id: p.id, label: `${p.label} (${p.id})` })),
+                    items: ensureOption(hostB),
                     onChange: setHostB,
                   }),
                 ),
@@ -716,23 +1034,10 @@ window.__ModuleLoader__.load({
                   h('span', null, vText('播客主题或文稿路径', 'Topic or script path')),
                   h(W.Input, { value: podcastTopic, onChange: e => setPodcastTopic(e.target.value) }),
                 ),
-                h('label', { className: 'voice-field' },
-                  h('span', null, vText('背景音乐 (bgmFile)', 'BGM File (optional)')),
-                  h(W.Input, { value: bgmFile, placeholder: 'bgm.mp3', onChange: e => setBgmFile(e.target.value) }),
-                ),
-                h('label', { className: 'voice-field' },
-                  h('span', null, vText('背景音量 (0.02-1.0)', 'BGM Volume')),
-                  h(W.Input, { value: bgmVolume, placeholder: '0.18', onChange: e => setBgmVolume(e.target.value) }),
-                ),
               ),
-              h(W.Checkbox, {
-                label: vText('开启 -16 LUFS 播客响度均衡 (normalizeLoudness)', 'Enable -16 LUFS loudness normalization'),
-                checked: podcastLoudness,
-                onChange: setPodcastLoudness,
-              }),
               h('pre', { className: 'voice-prompt-preview' }, podcastPromptText),
               h(W.CopyPrompt, {
-                variant: 'primary',
+                variant: 'outline',
                 prompt: podcastPromptText,
                 label: vText('一键复制播客配音指令', 'Copy Podcast Prompt'),
                 copiedLabel: t('copied'),
@@ -740,38 +1045,130 @@ window.__ModuleLoader__.load({
                 failedText: t('copyFailed'),
               }),
             ),
-            h('section', { className: 'voice-panel-card', 'data-dsh-card': '' },
-              h('h3', { 'data-dsh-editorial-heading': '' }, vText('.srt / .vtt 视频反向卡点配音生成器', '.srt / .vtt Timeline-Synced Dubbing')),
-              h('div', { className: 'voice-form-grid' },
-                h('label', { className: 'voice-field' },
-                  h('span', null, vText('字幕文件路径 (subtitleInput)', 'Subtitle file path')),
-                  h(W.Input, { value: srtFile, placeholder: 'video.srt', onChange: e => setSrtFile(e.target.value) }),
-                ),
-                h('label', { className: 'voice-field' },
-                  h('span', null, vText('配音音色 / 人设', 'Target Voice / Persona')),
-                  h(W.Input, { value: dubVoice, placeholder: 'zh-CN-YunzeNeural', onChange: e => setDubVoice(e.target.value) }),
-                ),
-                h('label', { className: 'voice-field voice-field-span2' },
-                  h('span', null, vText('输出音频路径', 'Output MP3 path')),
-                  h(W.Input, { value: dubOut, placeholder: 'dubbing.mp3', onChange: e => setDubOut(e.target.value) }),
-                ),
+          ),
+
+          h('section', { className: 'voice-panel-card', 'data-dsh-card': '' },
+            h('h3', { 'data-dsh-editorial-heading': '' }, vText('.srt / .vtt 视频反向卡点配音生成器', '.srt / .vtt Timeline-Synced Dubbing')),
+            h('div', { className: 'voice-form-grid' },
+              h('label', { className: 'voice-field' },
+                h('span', null, vText('字幕文件路径 (subtitleInput)', 'Subtitle file path')),
+                h(W.Input, { value: srtFile, placeholder: 'video.srt', onChange: e => setSrtFile(e.target.value) }),
               ),
-              h('pre', { className: 'voice-prompt-preview' }, dubbingPromptText),
-              h(W.CopyPrompt, {
-                variant: 'primary',
-                prompt: dubbingPromptText,
-                label: vText('一键复制视频卡点配音指令', 'Copy Video Dubbing Prompt'),
-                copiedLabel: t('copied'),
-                statusText: t('copyStatus'),
-                failedText: t('copyFailed'),
-              }),
+              h('label', { className: 'voice-field' },
+                h('span', null, vText('配音音色 / 人设', 'Target Voice / Persona')),
+                h(W.Input, { value: dubVoice, placeholder: 'zh-CN-YunzeNeural', onChange: e => setDubVoice(e.target.value) }),
+              ),
+              h('label', { className: 'voice-field voice-field-span2' },
+                h('span', null, vText('输出音频路径', 'Output MP3 path')),
+                h(W.Input, { value: dubOut, placeholder: 'dubbing.mp3', onChange: e => setDubOut(e.target.value) }),
+              ),
             ),
+            h('pre', { className: 'voice-prompt-preview' }, dubbingPromptText),
+            h(W.CopyPrompt, {
+              variant: 'primary',
+              prompt: dubbingPromptText,
+              label: vText('一键复制视频卡点配音指令', 'Copy Video Dubbing Prompt'),
+              copiedLabel: t('copied'),
+              statusText: t('copyStatus'),
+              failedText: t('copyFailed'),
+            }),
           ),
         );
       }
 
       function renderMicTab() {
         return h('div', { className: 'voice-section-stack' },
+          h('section', { className: 'voice-panel-card', 'data-dsh-card': '' },
+            h('div', { className: 'voice-block-head' },
+              h('h3', { 'data-dsh-editorial-heading': '' }, vText('8 秒录音一键生成克隆角色', '8-Second Mic Direct-to-Clone Role Creator')),
+              h('span', { className: 'dsh-wb-tag', 'data-tone': 'success' }, vText('建议朗读 5–10 秒清晰人声', 'Read clearly for 5–10s')),
+            ),
+            h('p', { className: 'voice-muted' }, vText(
+              '用麦克风录制 5–10 秒人声，自动落盘至工作区 voice_clones/、调用已就绪 ASR 自动提取参考台词，并注册到 customVoices（配合 SiliconFlow CosyVoice2 或本地 GPT-SoVITS 即可零样本克隆音色）。',
+              'Record 5–10s of clear speech to save under voice_clones/, auto-transcribe reference text via ASR, and register a reusable clone role in customVoices.',
+            )),
+            h('div', { className: 'voice-form-grid' },
+              h('label', { className: 'voice-field' },
+                h('span', null, vText('克隆角色名称 *', 'Clone Role Alias *')),
+                h(W.Input, {
+                  value: cloneAliasName,
+                  placeholder: vText('我的克隆音色', 'my-cloned-voice'),
+                  disabled: recording || !!busy,
+                  onChange: e => setCloneAliasName(e.target.value),
+                }),
+              ),
+              h('label', { className: 'voice-field' },
+                h('span', null, vText('参考台词（留空则通过 ASR 自动转写）', 'Reference text (leave blank for auto-ASR)')),
+                h(W.Input, {
+                  value: cloneRefText,
+                  placeholder: vText('如：大家好，这是我的专属语音克隆样本。', 'Optional transcript of your sample'),
+                  disabled: recording || !!busy,
+                  onChange: e => setCloneRefText(e.target.value),
+                }),
+              ),
+            ),
+            h('div', { className: 'dsh-wb-toolbar' },
+              !(recording && recordMode === 'clone')
+                ? h(W.Button, {
+                    variant: 'primary',
+                    icon: 'sparkles',
+                    spinning: busy === 'saveCloneVoice',
+                    disabled: recording || !!busy || !cloneAliasName.trim() || !writable,
+                    onClick: () => { void startRecording('clone'); },
+                  }, busy === 'saveCloneVoice'
+                    ? vText('正在保存并生成克隆角色…', 'Creating clone role…')
+                    : vText('开始 8 秒克隆样本录音', 'Start 8s Clone Recording'))
+                : h(React.Fragment, null,
+                    h(W.Button, {
+                      variant: 'primary',
+                      icon: 'check',
+                      onClick: () => stopAndProcessRecording(false),
+                    }, vText(`停止并创建克隆角色 (${formatTimer(recordSec)})`, `Stop & Create Clone Role (${formatTimer(recordSec)})`)),
+                    h(W.Button, {
+                      icon: 'close',
+                      onClick: () => stopAndProcessRecording(true),
+                    }, vText('取消录音', 'Cancel')),
+                    h('span', { className: 'voice-muted' }, vText('建议朗读 5–10 秒清晰人声', 'Recommended: 5–10s of clear speech')),
+                  ),
+            ),
+            cloneResult
+              ? h('div', { className: 'voice-clone-result' },
+                  h('div', { className: 'voice-block-head' },
+                    h('strong', null, vText(`已创建克隆角色：${cloneResult.name}`, `Created Clone Role: ${cloneResult.name}`)),
+                    h('span', { className: 'voice-mono' }, cloneResult.referenceAudio),
+                  ),
+                  cloneResult.referenceText
+                    ? h('p', { className: 'voice-muted' }, vText('参考台词：', 'Reference text: ') + cloneResult.referenceText)
+                    : null,
+                  cloneResult.transcribeWarning
+                    ? h('p', { className: 'voice-muted' }, vText('自动转写提示：', 'ASR note: ') + cloneResult.transcribeWarning)
+                    : null,
+                  h('div', { className: 'dsh-wb-toolbar' },
+                    h(W.Button, {
+                      size: 'sm',
+                      variant: 'primary',
+                      icon: 'play',
+                      disabled: !!busy,
+                      onClick: () => {
+                        setStudioVoice(cloneResult.name);
+                        setActiveTab('studio');
+                      },
+                    }, vText('在试配台使用该角色', 'Use Role in Studio')),
+                    h(W.CopyPrompt, {
+                      prompt: vText(
+                        `请使用我的自定义克隆角色「${cloneResult.name}」将以下内容合成为 MP3：`,
+                        `Synthesize the following text to MP3 using my cloned voice "${cloneResult.name}":`,
+                      ),
+                      label: vText('复制克隆角色配音指令', 'Copy Clone Voice Prompt'),
+                      copiedLabel: t('copied'),
+                      statusText: t('copyStatus'),
+                      failedText: t('copyFailed'),
+                    }),
+                  ),
+                )
+              : null,
+          ),
+
           h('section', { className: 'voice-panel-card', 'data-dsh-card': '' },
             h('div', { className: 'voice-block-head' },
               h('h3', { 'data-dsh-editorial-heading': '' }, vText('浏览器麦克风语音速记（ASR 转写）', 'Browser Mic Voice Memo (ASR)')),
@@ -794,22 +1191,23 @@ window.__ModuleLoader__.load({
               ),
             ),
             h('div', { className: 'dsh-wb-toolbar' },
-              !recording
+              !(recording && recordMode === 'memo')
                 ? h(W.Button, {
                     variant: 'primary',
                     icon: 'play',
-                    disabled: !!busy || !state?.sttReady,
-                    onClick: () => { void startRecording(); },
+                    spinning: busy === 'transcribeMic',
+                    disabled: recording || !!busy || !state?.sttReady,
+                    onClick: () => { void startRecording('memo'); },
                   }, busy === 'transcribeMic' ? vText('正在转写…', 'Transcribing…') : vText('开始麦克风录音', 'Start Mic Recording'))
                 : h(React.Fragment, null,
                     h(W.Button, {
                       variant: 'primary',
                       icon: 'check',
-                      onClick: () => stopAndTranscribe(false),
+                      onClick: () => stopAndProcessRecording(false),
                     }, vText(`停止并转写 (${formatTimer(recordSec)})`, `Stop & Transcribe (${formatTimer(recordSec)})`)),
                     h(W.Button, {
                       icon: 'close',
-                      onClick: () => stopAndTranscribe(true),
+                      onClick: () => stopAndProcessRecording(true),
                     }, vText('取消录音', 'Cancel')),
                   ),
             ),
@@ -839,6 +1237,7 @@ window.__ModuleLoader__.load({
                 )
               : null,
           ),
+
           h('section', { className: 'voice-panel-card', 'data-dsh-card': '' },
             h('div', { className: 'voice-block-head' },
               h('h3', { 'data-dsh-editorial-heading': '' }, vText('自定义音色别名与参考音频 (customVoices)', 'Custom Voice Aliases (customVoices)')),
@@ -870,7 +1269,7 @@ window.__ModuleLoader__.load({
                     ),
                   )),
                 )
-              : h('p', { className: 'voice-muted' }, vText('暂无自定义音色别名，可在下方添加常用角色。', 'No custom voice aliases yet. Add one below.')),
+              : h('p', { className: 'voice-muted' }, vText('暂无自定义音色别名，可用上方 8 秒录音创建或在下方手动添加。', 'No custom voice aliases yet. Record above or add one below.')),
             h('form', {
               className: 'voice-subform',
               onSubmit: e => {
@@ -960,7 +1359,7 @@ window.__ModuleLoader__.load({
                 h('strong', null, 'FFmpeg'),
                 h('span', { className: 'dsh-wb-tag', 'data-tone': state?.hasFfmpeg ? 'success' : 'warn' },
                   state?.hasFfmpeg ? vText('可用', 'Available') : vText('未安装', 'Not found')),
-                h('span', { className: 'voice-muted' }, vText('响度均衡、BGM 混音与声道分离', 'Loudnorm, BGM ducking & stereo split')),
+                h('span', { className: 'voice-muted' }, vText('响度均衡、BGM 混音与视频直转', 'Loudnorm, BGM ducking & video STT')),
               ),
               h('div', { className: 'voice-health-item' },
                 h('strong', null, vText('网络代理 & 写入权限', 'Proxy & Write Mode')),
@@ -980,8 +1379,8 @@ window.__ModuleLoader__.load({
               h('span', { className: 'dsh-wb-count' }, pronunciations.length),
             ),
             h('p', { className: 'voice-muted' }, vText(
-              'Edge TTS 自动生成 SSML <sub alias>（同步字幕保留原词 Nginx，语音读作 Engine X）；OpenAI/SiliconFlow 自动替读。',
-              'Edge TTS emits SSML <sub alias> so subtitles keep original spelling while speech uses the alias; OpenAI/SiliconFlow replace inline.',
+              '支持 ASCII 词边界安全匹配（如 OS 绝不误伤 POST）；Edge TTS 生成 SSML <sub alias> 保留原词字幕，OpenAI/SiliconFlow 自动替读。',
+              'Word-boundary safe matching (e.g. OS never corrupts POST); Edge TTS emits SSML <sub alias> keeping original subtitle text.',
             )),
             h('div', { className: 'dsh-wb-prompt-chips' },
               presets.map(p => h(W.Button, {
@@ -1050,6 +1449,64 @@ window.__ModuleLoader__.load({
         );
       }
 
+      function renderLibraryTab() {
+        return h('div', { className: 'voice-section-stack' },
+          h('section', { className: 'voice-panel-card', 'data-dsh-card': '' },
+            h('div', { className: 'voice-block-head' },
+              h('h3', { 'data-dsh-editorial-heading': '' }, vText('工作区音频与同步字幕成品库', 'Workspace Audio & Subtitle Library')),
+              h(W.Button, {
+                size: 'sm',
+                icon: 'refresh',
+                spinning: busy === 'workspaceLibrary',
+                disabled: !!busy,
+                onClick: () => { void loadLibrary(); },
+              }, vText('刷新列表', 'Refresh')),
+            ),
+            h('p', { className: 'voice-muted' }, vText(
+              '自动扫描当前会话工作区根目录及 voice_outputs/、voice_previews/、voice_clones/ 中的音频文件，并配对同名 .srt/.vtt 字幕实现点按跳播跟读。',
+              'Lists audio files across workspace root, voice_outputs/, voice_previews/, and voice_clones/, pairing sibling .srt/.vtt subtitles for click-to-seek playback.',
+            )),
+            busy === 'workspaceLibrary' && !libraryLoaded
+              ? h(W.Empty, { title: vText('正在扫描工作区音频…', 'Scanning workspace media…'), icon: 'folder' })
+              : libraryItems.length === 0
+                ? h(W.Empty, {
+                    title: vText('当前工作区暂无音频成品', 'No audio files in workspace yet'),
+                    icon: 'folder',
+                    action: h(W.Button, {
+                      variant: 'primary',
+                      icon: 'play',
+                      onClick: () => setActiveTab('studio'),
+                    }, vText('前往编排多角色对话', 'Open Dialogue Composer')),
+                  })
+                : h('div', { className: 'voice-list-stack' },
+                    libraryItems.map(item => h('div', { key: item.path, className: 'voice-list-item' },
+                      h('div', { className: 'voice-list-main' },
+                        h('div', { className: 'voice-library-title-row' },
+                          h('strong', null, item.name),
+                          item.subtitlePath
+                            ? h('span', { className: 'dsh-wb-tag', 'data-tone': 'success' },
+                                vText('含同步字幕 .srt/.vtt', 'Synced .srt/.vtt'))
+                            : null,
+                        ),
+                        h('span', { className: 'voice-mono' },
+                          `${item.path} · ${Math.max(1, Math.round((item.bytes || 0) / 1024))} KB`),
+                      ),
+                      h('div', { className: 'dsh-wb-toolbar' },
+                        h(W.Button, {
+                          size: 'sm',
+                          variant: 'primary',
+                          icon: 'play',
+                          spinning: busy === 'media:' + item.path,
+                          disabled: !!busy,
+                          onClick: () => { void playWorkspaceItem(item); },
+                        }, vText('▶ 字幕跟读播放', '▶ Follow-Along Play')),
+                      ),
+                    )),
+                  ),
+          ),
+        );
+      }
+
       return h(W.Page, {
         workbench,
         icon: 'play',
@@ -1059,8 +1516,8 @@ window.__ModuleLoader__.load({
         className: 'dshv voice-workbench',
         tourSteps: voiceTourSteps,
         tourStorageKey: 'dsh-voice.tour.v1',
-        onTourCopyPrompt: async text => {
-          const ok = await W.writeClipboardText(text);
+        onTourCopyPrompt: async textVal => {
+          const ok = await W.writeClipboardText(textVal);
           if (ok) setNotice(t('copyStatus'));
           return ok;
         },
@@ -1100,8 +1557,8 @@ window.__ModuleLoader__.load({
                 failedText: t('copyFailed'),
               }),
               h(W.CopyPrompt, {
-                prompt: vText('请把当前工作区的会议录音转为文字，开启说话人区分并导出 .srt 字幕', 'Transcribe the meeting audio with speaker diarization and export .srt subtitles'),
-                label: vText('复制：会议录音转字幕', 'Copy: Diarized transcription'),
+                prompt: vText('请把当前工作区的会议录音或 MP4 视频转为文字，开启说话人区分并导出 .srt 字幕', 'Transcribe the meeting audio/MP4 video with speaker diarization and export .srt subtitles'),
+                label: vText('复制：视频/录音转字幕', 'Copy: Video/Audio transcription'),
                 copiedLabel: t('copied'),
                 statusText: t('copyStatus'),
                 failedText: t('copyFailed'),
@@ -1119,6 +1576,7 @@ window.__ModuleLoader__.load({
             { id: 'studio', label: t('tabStudio') },
             { id: 'mic', label: t('tabMic'), count: customVoices.length || undefined },
             { id: 'lexicon', label: t('tabLexicon'), count: pronunciations.length || undefined },
+            { id: 'library', label: t('tabLibrary'), count: libraryItems.length || undefined },
           ],
         },
           loading ? h(W.Empty, { title: t('loading'), icon: 'play' })
@@ -1130,6 +1588,7 @@ window.__ModuleLoader__.load({
           : activeTab === 'voices' ? renderVoicesTab()
           : activeTab === 'studio' ? renderStudioTab()
           : activeTab === 'mic' ? renderMicTab()
+          : activeTab === 'library' ? renderLibraryTab()
           : renderLexiconTab(),
         ),
       );
@@ -1192,15 +1651,21 @@ const VOICE_WORKBENCH_CSS = `
 
 .voice-workbench .voice-player-bar {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px 14px;
+  flex-direction: column;
+  gap: 8px;
   margin: 10px 18px 0;
   padding: 10px 14px;
   border-radius: var(--w-radius-md);
   border: var(--dsh-control-border-width, 0.5px) solid var(--w-border);
   background: var(--w-bg-1);
+}
+
+.voice-workbench .voice-player-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
 }
 
 .voice-workbench .voice-player-meta {
@@ -1216,16 +1681,80 @@ const VOICE_WORKBENCH_CSS = `
   gap: 8px;
   flex: 1;
   min-width: 240px;
+  flex-wrap: wrap;
 }
 
 .voice-workbench .voice-audio-el {
   flex: 1;
-  min-width: 180px;
+  min-width: 170px;
   height: 34px;
 }
 
 .voice-workbench .voice-speed-select {
   width: 84px;
+  flex: none;
+}
+
+.voice-workbench .voice-download-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: var(--w-radius-sm);
+  border: var(--dsh-control-border-width, 0.5px) solid var(--w-border);
+  background: var(--w-bg-base);
+  color: var(--w-ink);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.voice-workbench .voice-download-link:hover {
+  border-color: var(--w-accent);
+  color: var(--w-accent);
+}
+
+.voice-workbench .voice-cue-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 128px;
+  overflow-y: auto;
+  padding-block-start: 6px;
+  border-block-start: var(--dsh-control-border-width, 0.5px) solid var(--w-border);
+}
+
+.voice-workbench .voice-cue-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: var(--w-radius-sm);
+  border: var(--dsh-control-border-width, 0.5px) solid var(--w-border);
+  background: var(--w-bg-base);
+  color: var(--w-ink);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.voice-workbench .voice-cue-chip:hover {
+  border-color: var(--w-accent);
+}
+
+.voice-workbench .voice-cue-chip.is-active {
+  border-color: var(--w-accent);
+  background: var(--w-accent-soft);
+  font-weight: 600;
+}
+
+.voice-workbench .voice-cue-time {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  color: var(--w-muted);
   flex: none;
 }
 
@@ -1343,10 +1872,52 @@ const VOICE_WORKBENCH_CSS = `
   background: var(--w-bg-1);
 }
 
-.voice-workbench .voice-builders-grid {
+.voice-workbench .voice-dialogue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.voice-workbench .voice-dialogue-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  border-radius: var(--w-radius-sm);
+  border: var(--dsh-control-border-width, 0.5px) solid var(--w-border);
+  background: var(--w-bg-base);
+}
+
+.voice-workbench .voice-dialogue-meta {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  gap: 14px;
+  grid-template-columns: minmax(110px, 160px) minmax(160px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.voice-workbench .voice-dialogue-input {
+  min-height: 52px;
+}
+
+.voice-workbench .voice-inline-name-input {
+  max-width: 220px;
+}
+
+.voice-workbench .voice-clone-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 13px;
+  border-radius: var(--w-radius-sm);
+  border: var(--dsh-control-border-width, 0.5px) solid var(--w-accent);
+  background: var(--w-accent-soft);
+}
+
+.voice-workbench .voice-library-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .voice-workbench .voice-form-grid {
@@ -1452,6 +2023,9 @@ const VOICE_WORKBENCH_CSS = `
   }
   .voice-workbench .voice-field-span2 {
     grid-column: span 1;
+  }
+  .voice-workbench .voice-dialogue-meta {
+    grid-template-columns: 1fr;
   }
   .voice-workbench .voice-section-stack {
     padding: 12px 12px 24px;

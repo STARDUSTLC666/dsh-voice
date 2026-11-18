@@ -10,13 +10,18 @@ import { fetchEdgeVoices, synthesizeSpeech, synthesizeSpeechWithMetadata, type S
 import { rateToSpeed, synthesizeOpenAiSpeech, type ReferenceVoiceSample } from './openai-tts.js'
 import { assertAudioFile, assertWorkspaceFile, ensureWorkspaceDirectory, resolveOutputPath, writeWorkspaceFile } from './paths.js'
 import { createProxyFetch } from './proxy-fetch.js'
-import { assertAudioSize, formatDiarizedTranscript, formatSttSubtitles, hasFfmpeg, prepareAudioForAsr, splitStereoChannelsForDiarization, transcribe, type SttSegment } from './stt.js'
+import { assertAudioSize, formatDiarizedTranscript, formatSttSubtitles, hasFfmpeg, isVideoContainerFile, prepareAudioForAsr, splitStereoChannelsForDiarization, transcribe, type SttSegment } from './stt.js'
 import {
   applyPronunciationsPlain,
   cleanMarkdownForSpeech,
   concatMp3Buffers,
   createSilenceMp3,
+  embedMp3Chapters,
+  extractMarkdownSections,
+  fitAudioToWindow,
+  formatChaptersMarkdown,
   formatSubtitles,
+  groupWordCues,
   inspectMp3Buffer,
   mixAudioWithBgm,
   normalizeAudioLoudness,
@@ -24,7 +29,11 @@ import {
   parseSubtitleFile,
   renderPreviewHtml,
   scaleRatePercent,
+  splitInlinePauses,
   splitTextIntoChunks,
+  stripInlinePauses,
+  type AudioChapter,
+  type SubtitleGranularity,
 } from './tts-text.js'
 import { filterVoices, isValidVoiceId, resolvePersona, VOICE_PERSONAS, VOICES } from './voices.js'
 
@@ -154,8 +163,11 @@ function mimeFromPath(filePath: string): string {
   return table[ext] ?? 'application/octet-stream'
 }
 
-function subtitleFormatOf(filePath: string): 'srt' | 'vtt' {
-  return extname(filePath).toLowerCase() === '.vtt' ? 'vtt' : 'srt'
+function subtitleFormatOf(filePath: string): 'srt' | 'vtt' | 'ass' {
+  const ext = extname(filePath).toLowerCase()
+  if (ext === '.vtt') return 'vtt'
+  if (ext === '.ass') return 'ass'
+  return 'srt'
 }
 
 const voiceItemSchema = {
@@ -233,6 +245,8 @@ const ttsSchema = {
     textLength: { type: 'integer' },
     chunks: { type: 'integer' },
     subtitleFile: { type: 'string' },
+    chapters: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    chaptersFile: { type: 'string' },
   },
   additionalProperties: true,
 }
@@ -325,6 +339,7 @@ interface EffectiveVoiceSpec {
 }
 
 interface ParsedSegment {
+  title?: string
   chunks: string[]
   voice: string
   rate: string
@@ -338,6 +353,13 @@ interface ParsedSegment {
 interface ChunkSynthesisResult {
   audio: Buffer
   cues: SubtitleCue[]
+  wordCues?: SubtitleCue[]
+}
+
+interface SubtitleSynthesisOptions {
+  granularity: SubtitleGranularity
+  maxCharsPerCue: number
+  isAss: boolean
 }
 
 /** 可注入依赖（测试用假实现）。 */
@@ -351,6 +373,7 @@ export interface VoiceToolDeps {
   normalizeAudio?: typeof normalizeAudioLoudness
   mixBgm?: typeof mixAudioWithBgm
   splitStereo?: typeof splitStereoChannelsForDiarization
+  fitWindow?: typeof fitAudioToWindow
 }
 
 /**
@@ -558,6 +581,7 @@ export function buildVoiceTools(
     instructions?: string,
     references?: VoiceReference[],
     pronunciations?: readonly PronunciationRule[],
+    subtitleOpts?: SubtitleSynthesisOptions,
   ): Promise<ChunkSynthesisResult> => {
     const hasPronunciations = pronunciations !== undefined && pronunciations.length > 0
     if (useEdge) {
@@ -572,47 +596,102 @@ export function buildVoiceTools(
       }
       if (deps.ttsWithMeta !== undefined || deps.tts === undefined) {
         const withMetaFn = deps.ttsWithMeta ?? synthesizeSpeechWithMetadata
+        const wantWordBoundary = subtitleOpts !== undefined
+          && (subtitleOpts.granularity === 'clause' || subtitleOpts.granularity === 'word' || subtitleOpts.isAss)
+        if (!wantWordBoundary) {
+          const res = await raceAbort(
+            withMetaFn({ text: chunkText, voice, rate, pitch, boundary: 'sentence', ...pronOpt }, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal),
+            signal,
+          )
+          const cues = res.cues.length > 0
+            ? res.cues
+            : [{ index: 1, startMs: 0, endMs: Math.max(1, inspectMp3Buffer(res.audio).durationMs), text: stripInlinePauses(chunkText) }]
+          return { audio: res.audio, cues }
+        }
         const res = await raceAbort(
-          withMetaFn({ text: chunkText, voice, rate, pitch, boundary: 'sentence', ...pronOpt }, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal),
+          withMetaFn({ text: chunkText, voice, rate, pitch, boundary: 'word', ...pronOpt }, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal),
           signal,
         )
-        const cues = res.cues.length > 0
-          ? res.cues
-          : [{ index: 1, startMs: 0, endMs: Math.max(1, inspectMp3Buffer(res.audio).durationMs), text: chunkText }]
-        return { audio: res.audio, cues }
+        const rawWords = res.cues
+        const effectiveGranularity: SubtitleGranularity = subtitleOpts.granularity === 'sentence' && subtitleOpts.isAss
+          ? 'clause'
+          : subtitleOpts.granularity
+        const grouped = rawWords.length > 0
+          ? groupWordCues(rawWords, effectiveGranularity, subtitleOpts.maxCharsPerCue)
+          : [{ index: 1, startMs: 0, endMs: Math.max(1, inspectMp3Buffer(res.audio).durationMs), text: stripInlinePauses(chunkText) }]
+        return { audio: res.audio, cues: grouped, wordCues: rawWords }
       }
       const audio = await raceAbort(deps.tts({ text: chunkText, voice, rate, pitch, ...pronOpt }, { proxyUrl: cfg.proxyUrl }, cfg.timeoutMs, signal), signal)
       return {
         audio,
-        cues: [{ index: 1, startMs: 0, endMs: Math.max(1, inspectMp3Buffer(audio).durationMs), text: chunkText }],
+        cues: [{ index: 1, startMs: 0, endMs: Math.max(1, inspectMp3Buffer(audio).durationMs), text: stripInlinePauses(chunkText) }],
       }
     }
 
-    const spokenText = hasPronunciations ? applyPronunciationsPlain(chunkText, pronunciations) : chunkText
     const openaiFn = deps.openaiTts ?? synthesizeOpenAiSpeech
-    const audio = await raceAbort(
-      openaiFn(
-        cfg.ttsBaseUrl,
-        cfg.ttsApiKey,
-        {
-          text: spokenText,
-          voice,
-          model: cfg.ttsModel !== '' ? cfg.ttsModel : FALLBACK_TTS_MODEL,
-          speed: rateToSpeed(rate),
-          ...(instructions !== undefined ? { instructions } : {}),
-          ...(references !== undefined && references.length > 0 ? { references } : {}),
+    const runOpenAiPiece = (rawPieceText: string) => {
+      const spokenText = hasPronunciations ? applyPronunciationsPlain(rawPieceText, pronunciations) : rawPieceText
+      return raceAbort(
+        openaiFn(
+          cfg.ttsBaseUrl,
+          cfg.ttsApiKey,
+          {
+            text: spokenText,
+            voice,
+            model: cfg.ttsModel !== '' ? cfg.ttsModel : FALLBACK_TTS_MODEL,
+            speed: rateToSpeed(rate),
+            ...(instructions !== undefined ? { instructions } : {}),
+            ...(references !== undefined && references.length > 0 ? { references } : {}),
+            signal,
+          },
+          getProxyFetch(cfg.proxyUrl) ?? globalThis.fetch,
+          cfg.timeoutMs,
           signal,
-        },
-        getProxyFetch(cfg.proxyUrl) ?? globalThis.fetch,
-        cfg.timeoutMs,
+        ),
         signal,
-      ),
-      signal,
-    )
+      )
+    }
+
+    const pieces = splitInlinePauses(chunkText)
+    let audio: Buffer
+    if (pieces.some((p) => p.kind === 'pause')) {
+      const textPieces = pieces.filter((p): p is { kind: 'text'; text: string } => p.kind === 'text' && p.text.trim() !== '')
+      if (textPieces.length === 0) {
+        const totalPauseMs = pieces.reduce((sum, p) => sum + (p.kind === 'pause' ? p.durationMs : 0), 0)
+        audio = createSilenceMp3(Math.max(50, totalPauseMs), 24000)
+      } else {
+        const synthesizedByIndex = new Map<number, Buffer>()
+        let detectedSampleRate = 24000
+        for (let i = 0; i < pieces.length; i++) {
+          const piece = pieces[i]
+          if (piece.kind !== 'text' || piece.text.trim() === '') continue
+          throwIfAborted(signal)
+          const partAudio = await runOpenAiPiece(piece.text)
+          throwIfAborted(signal)
+          const info = inspectMp3Buffer(partAudio)
+          if (info.frameCount > 0) detectedSampleRate = info.sampleRate
+          synthesizedByIndex.set(i, partAudio)
+        }
+        const partBuffers: Buffer[] = []
+        for (let i = 0; i < pieces.length; i++) {
+          const piece = pieces[i]
+          if (piece.kind === 'pause') {
+            const sil = createSilenceMp3(piece.durationMs, detectedSampleRate)
+            if (sil.length > 0) partBuffers.push(sil)
+          } else {
+            const partAudio = synthesizedByIndex.get(i)
+            if (partAudio !== undefined && partAudio.length > 0) partBuffers.push(partAudio)
+          }
+        }
+        audio = partBuffers.length === 1 ? partBuffers[0] : concatMp3Buffers(partBuffers)
+      }
+    } else {
+      audio = await runOpenAiPiece(chunkText)
+    }
     return {
       audio,
       cues: needSubtitles
-        ? [{ index: 1, startMs: 0, endMs: Math.max(1, inspectMp3Buffer(audio).durationMs), text: chunkText }]
+        ? [{ index: 1, startMs: 0, endMs: Math.max(1, inspectMp3Buffer(audio).durationMs), text: stripInlinePauses(chunkText) }]
         : [],
     }
   }
@@ -727,18 +806,19 @@ export function buildVoiceTools(
   const voiceTts: VoiceToolDefinition = {
     name: 'voice_tts',
     isConcurrencySafe: () => !getCfg().overwrite,
-    description: '文字转语音：默认调用 edge-tts（微软 Edge 朗读服务，免费）合成 MP3，也可在设置中切换 OpenAI/SiliconFlow/自定义 TTS 引擎。支持内置角色人设 persona、自然语言情绪指令 instructions、5–10 秒参考音频零样本克隆 referenceAudio、自定义发音词典 pronunciations、多角色播客 segments、读取工作区 inputFile（自动清理 Markdown）、按 .srt/.vtt 字幕时间轴反向卡点配音 subtitleInput、背景音乐自动闪避混音 bgmFile、长文自动分段（≤100000 字符）、导出 .srt/.vtt 字幕与 -16 LUFS 响度均衡 normalizeLoudness，并返回精确时长 durationMs/durationSec；输出默认 voice_output.mp3。',
+    description: '文字转语音：默认调用 edge-tts（微软 Edge 朗读服务，免费）合成 MP3，也可在设置中切换 OpenAI/SiliconFlow/自定义 TTS 引擎。支持内置角色人设 persona、自然语言情绪指令 instructions、5–10 秒参考音频零样本克隆 referenceAudio、自定义发音词典 pronunciations、行内停顿标签 [pause:500ms]、多角色播客 segments（支持章节书签 title）、读取工作区 inputFile（Markdown 多标题自动生成 MP3 CHAP 章节书签与 chaptersOutput 时间轴）、按 .srt/.vtt 字幕时间轴反向卡点配音 subtitleInput、背景音乐自动闪避混音 bgmFile、长文自动分段（≤100000 字符）、导出 .srt/.vtt/.ass 字幕（支持 subtitleGranularity 短句/逐词与卡拉 OK 高亮）及 -16 LUFS 响度均衡 normalizeLoudness，并返回精确时长 durationMs/durationSec；输出默认 voice_output.mp3。',
     parameters: compileParameters({
-      text: { type: 'string', description: '要合成的文本（若提供 inputFile、segments 或 subtitleInput 则可选；支持长文本自动分段，≤100000 字符）。' },
-      inputFile: { type: 'string', description: '工作区内文稿文件路径（可选，如 article.md；指定时直接从文件读取）。' },
-      subtitleInput: { type: 'string', description: '按现有 .srt/.vtt 字幕时间轴反向卡点配音（可选，工作区内字幕路径；每条字幕超出时间窗时自动微调语速加速，句间自动补齐精确静音以对齐原视频画面）。' },
+      text: { type: 'string', description: '要合成的文本（若提供 inputFile、segments 或 subtitleInput 则可选；支持长文本自动分段与 [pause:500ms] 行内停顿标签，≤100000 字符）。' },
+      inputFile: { type: 'string', description: '工作区内文稿文件路径（可选，如 article.md；指定时直接从文件读取，多级标题 Markdown 自动写入 MP3 章节书签）。' },
+      subtitleInput: { type: 'string', description: '按现有 .srt/.vtt 字幕时间轴反向卡点配音（可选，工作区内字幕路径；每条字幕超出时间窗时自动微调语速加速，必要时用 ffmpeg atempo 精确贴合时间窗，句间自动补齐精确静音以对齐原视频画面）。' },
       cleanMarkdown: { type: 'boolean', description: '是否清理 Markdown 语法以便朗读（可选；inputFile 为 .md/.markdown 时默认 true）。' },
       segments: {
         type: 'array',
-        description: '多角色对话/播客分段（可选，最多 50 段）：每段可独立指定 voice/persona/text/rate/pitch/pauseMs/instructions/referenceAudio/referenceText。',
+        description: '多角色对话/播客分段（可选，最多 50 段）：每段可独立指定 title/voice/persona/text/rate/pitch/pauseMs/instructions/referenceAudio/referenceText。',
         items: {
           type: 'object',
           properties: {
+            title: { type: 'string', description: '本段章节标题（可选，用于写入 MP3 章节书签与章节时间轴）。' },
             voice: { type: 'string' },
             persona: { type: 'string' },
             text: { type: 'string' },
@@ -776,18 +856,25 @@ export function buildVoiceTools(
       bgmDucking: { type: 'boolean', default: true, description: '人声说话时是否自动压低背景音乐音量（Auto-Ducking，可选，默认 true）。' },
       normalizeLoudness: { type: 'boolean', default: false, description: '是否在合成后通过 ffmpeg 执行 -16 LUFS 播客响度均衡（可选，默认 false）。' },
       output: { type: 'string', description: '输出 MP3 路径（可选，相对路径按会话工作目录解析）。' },
-      subtitleOutput: { type: 'string', description: '导出同步字幕文件路径（可选，.srt 或 .vtt，相对路径按会话工作目录解析）。' },
+      subtitleOutput: { type: 'string', description: '导出同步字幕文件路径（可选，支持 .srt、.vtt 或带卡拉 OK 高亮的 .ass，相对路径按会话工作目录解析）。' },
+      subtitleGranularity: { type: 'string', enum: ['sentence', 'clause', 'word'], description: '字幕粒度（可选：sentence 整句默认、clause 短视频短句切分、word 逐词时间轴；导出 .ass 字幕时自动获取词级时间轴生成卡拉 OK 高亮）。' },
+      maxCharsPerCue: { type: 'integer', minimum: 4, maximum: 80, description: '短句字幕每屏最大字数（可选，默认 16，配合 subtitleGranularity=clause 或 .ass 字幕生效）。' },
+      chaptersOutput: { type: 'string', description: '导出章节时间轴路径（可选，支持 .md/.txt 节目时间轴或 .json；Markdown 多标题文稿或带 title 的 segments 播客同时自动写入 MP3 ID3v2 CHAP 章节书签）。' },
     }),
     output: {
       schema: ttsSchema,
       render: (_args, value) => {
         const rec = asRecord(value)
         const chunksInfo = typeof rec.chunks === 'number' && rec.chunks > 1 ? '，共 ' + rec.chunks + ' 段' : ''
+        const chaptersList = Array.isArray(rec.chapters) ? rec.chapters : []
+        const chaptersInfo = chaptersList.length > 0 ? '，含 ' + chaptersList.length + ' 个章节' : ''
         const voiceLabel = typeof rec.voice === 'string' && rec.voice !== '' ? rec.voice : '参考音频克隆'
         const durationInfo = typeof rec.durationSec === 'number' ? '，时长 ' + rec.durationSec + ' 秒' : ''
-        const lines = ['语音合成完成：' + rec.output + '（' + rec.bytes + ' 字节，音色 ' + voiceLabel + chunksInfo + durationInfo + '）']
+        const lines = ['语音合成完成：' + rec.output + '（' + rec.bytes + ' 字节，音色 ' + voiceLabel + chunksInfo + chaptersInfo + durationInfo + '）']
         const subtitleFile = typeof rec.subtitleFile === 'string' ? rec.subtitleFile : ''
         if (subtitleFile !== '') lines.push('字幕文件已写入：' + subtitleFile)
+        const chaptersFile = typeof rec.chaptersFile === 'string' ? rec.chaptersFile : ''
+        if (chaptersFile !== '') lines.push('章节文件已写入：' + chaptersFile)
         return [{ type: 'text', text: lines.join('\n') }]
       },
     },
@@ -807,8 +894,32 @@ export function buildVoiceTools(
       const normalizeLoudness = args.normalizeLoudness === true
       const requested = optionalString(args, 'output')
       const subtitleOutput = optionalString(args, 'subtitleOutput')
+      const chaptersOutput = optionalString(args, 'chaptersOutput')
       const needSubtitles = subtitleOutput !== undefined
+      const rawGranularity = optionalString(args, 'subtitleGranularity')
+      if (rawGranularity !== undefined && rawGranularity !== 'sentence' && rawGranularity !== 'clause' && rawGranularity !== 'word') {
+        throw new Error('subtitleGranularity 必须是 sentence / clause / word 之一（当前：' + rawGranularity + '）。')
+      }
+      const subtitleGranularity: SubtitleGranularity = (rawGranularity as SubtitleGranularity | undefined) ?? 'sentence'
+      const maxCharsPerCue = typeof args.maxCharsPerCue === 'number' && Number.isFinite(args.maxCharsPerCue)
+        ? Math.min(80, Math.max(4, Math.round(args.maxCharsPerCue)))
+        : 16
+      const subtitleOpts: SubtitleSynthesisOptions | undefined = needSubtitles
+        ? {
+            granularity: subtitleGranularity,
+            maxCharsPerCue,
+            isAss: subtitleOutput !== undefined && subtitleFormatOf(subtitleOutput) === 'ass',
+          }
+        : undefined
       const mergedPronunciations = mergePronunciations(cfg.pronunciations, parseCallPronunciations(args.pronunciations))
+
+      const writeChaptersOutput = (chapters: readonly AudioChapter[]): string => {
+        if (chaptersOutput === undefined || chapters.length === 0) return ''
+        const content = extname(chaptersOutput).toLowerCase() === '.json'
+          ? JSON.stringify(chapters, null, 2) + '\n'
+          : formatChaptersMarkdown(chapters)
+        return writeWorkspaceFile(resolveOutputPath(chaptersOutput, '', cfg.overwrite, cwd), content, cwd, undefined, cfg.overwrite)
+      }
 
       const bgmFile = optionalString(args, 'bgmFile')
       let bgmPath: string | undefined
@@ -849,6 +960,7 @@ export function buildVoiceTools(
           if (segText === '') throw new Error('第 ' + (i + 1) + ' 段清理 Markdown 后文本为空。')
           totalChars += segText.length
 
+          const segTitle = optionalString(seg, 'title')
           const segVoice = optionalString(seg, 'voice')
           const segPersona = optionalString(seg, 'persona')
           const segRate = optionalString(seg, 'rate')
@@ -907,6 +1019,7 @@ export function buildVoiceTools(
 
           const chunks = segText.length > 4000 ? splitTextIntoChunks(segText, 2800) : [segText]
           parsedSegments.push({
+            ...(segTitle !== undefined ? { title: segTitle } : {}),
             chunks,
             voice: segSpec.voice,
             rate: segSpec.rate,
@@ -922,6 +1035,7 @@ export function buildVoiceTools(
         }
         resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd)
         if (subtitleOutput !== undefined) resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd)
+        if (chaptersOutput !== undefined) resolveOutputPath(chaptersOutput, '', cfg.overwrite, cwd)
 
         const tasks: Array<{
           segIndex: number
@@ -961,53 +1075,93 @@ export function buildVoiceTools(
             task.instructions,
             task.references,
             mergedPronunciations,
+            subtitleOpts,
           ),
         )
         throwIfAborted(signal)
 
         const buffers: Buffer[] = []
         const allCues: SubtitleCue[] = []
+        const allWordCues: SubtitleCue[] = []
+        const chapters: AudioChapter[] = []
+        const shouldRecordChapters = parsedSegments.some((s) => s.title !== undefined) || chaptersOutput !== undefined
         let offsetMs = 0
+        let audioOffsetMs = 0
         let cueIndex = 1
+        let wordCueIndex = 1
         let resultIdx = 0
         let detectedSampleRate = 24000
         for (let s = 0; s < parsedSegments.length; s++) {
           const seg = parsedSegments[s]
+          const segStartMs = audioOffsetMs
           for (let c = 0; c < seg.chunks.length; c++) {
             const res = chunkResults[resultIdx++]
             buffers.push(res.audio)
             const chunkInfo = inspectMp3Buffer(res.audio)
             if (chunkInfo.frameCount > 0) detectedSampleRate = chunkInfo.sampleRate
             const chunkDurationMs = chunkInfo.durationMs
+            audioOffsetMs += chunkDurationMs
             if (needSubtitles) {
               const shifted = offsetCues(res.cues, offsetMs, cueIndex)
               allCues.push(...shifted)
               cueIndex += shifted.length
+              if (res.wordCues !== undefined && res.wordCues.length > 0) {
+                const shiftedWords = offsetCues(res.wordCues, offsetMs, wordCueIndex)
+                allWordCues.push(...shiftedWords)
+                wordCueIndex += shiftedWords.length
+              }
               const cueSpan = shifted.length > 0 ? Math.max(0, shifted[shifted.length - 1].endMs - offsetMs) : 0
               offsetMs += Math.max(chunkDurationMs, cueSpan)
             }
+          }
+          const segEndMs = Math.max(segStartMs, audioOffsetMs)
+          if (shouldRecordChapters) {
+            chapters.push({
+              title: seg.title ?? ('第 ' + (s + 1) + ' 段'),
+              startMs: segStartMs,
+              endMs: segEndMs,
+            })
           }
           if (s < parsedSegments.length - 1 && seg.pauseMs > 0) {
             const silence = createSilenceMp3(seg.pauseMs, detectedSampleRate)
             if (silence.length > 0) {
               buffers.push(silence)
-              offsetMs += inspectMp3Buffer(silence).durationMs
+              const silenceMs = inspectMp3Buffer(silence).durationMs
+              audioOffsetMs += silenceMs
+              offsetMs += silenceMs
             }
           }
         }
 
         let audio = buffers.length === 1 ? buffers[0] : concatMp3Buffers(buffers)
         audio = await finalizeVoiceAudio(audio, bgmPath, bgmVolume, bgmDucking, normalizeLoudness, signal)
+        if (chapters.length > 0) {
+          audio = embedMp3Chapters(audio, chapters)
+        }
         const finalInfo = inspectMp3Buffer(audio)
         const durationMs = finalInfo.durationMs
         const durationSec = Math.round(durationMs / 100) / 10
         const output = writeWorkspaceFile(resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd), audio, cwd, undefined, cfg.overwrite)
         let subtitleFile = ''
         if (subtitleOutput !== undefined) {
-          const formatted = formatSubtitles(allCues, subtitleFormatOf(subtitleOutput))
+          const formatted = formatSubtitles(allCues, subtitleFormatOf(subtitleOutput), allWordCues)
           subtitleFile = writeWorkspaceFile(resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd), formatted, cwd, undefined, cfg.overwrite)
         }
-        return { output, bytes: audio.length, durationMs, durationSec, voice: topSpec.voice, rate: topSpec.rate, pitch: topSpec.pitch, textLength: totalChars, chunks: tasks.length, subtitleFile }
+        const chaptersFile = writeChaptersOutput(chapters)
+        return {
+          output,
+          bytes: audio.length,
+          durationMs,
+          durationSec,
+          voice: topSpec.voice,
+          rate: topSpec.rate,
+          pitch: topSpec.pitch,
+          textLength: totalChars,
+          chunks: tasks.length,
+          subtitleFile,
+          ...(chapters.length > 0 ? { chapters } : {}),
+          ...(chaptersFile !== '' ? { chaptersFile } : {}),
+        }
       }
 
       const subtitleInput = optionalString(args, 'subtitleInput')
@@ -1037,6 +1191,7 @@ export function buildVoiceTools(
         assertProsody(spec.rate, spec.pitch)
         resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd)
         if (subtitleOutput !== undefined) resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd)
+        if (chaptersOutput !== undefined) resolveOutputPath(chaptersOutput, '', cfg.overwrite, cwd)
 
         const cueResults = await mapLimit(cues, TTS_CHUNK_CONCURRENCY, signal, async (cue) => {
           const cueText = args.cleanMarkdown === true
@@ -1075,6 +1230,13 @@ export function buildVoiceTools(
               )
             }
           }
+          const postInfo = inspectMp3Buffer(res.audio)
+          const postMs = postInfo.durationMs
+          if (postMs > windowMs * 1.03 && (deps.fitWindow !== undefined || (postInfo.frameCount > 0 && hasFfmpeg()))) {
+            const fitted = await raceAbort((deps.fitWindow ?? fitAudioToWindow)(res.audio, windowMs, signal), signal)
+            throwIfAborted(signal)
+            res = { ...res, audio: fitted }
+          }
           return { audio: res.audio, textLength: cueText.length }
         })
         throwIfAborted(signal)
@@ -1106,7 +1268,7 @@ export function buildVoiceTools(
             index: i + 1,
             startMs: cueStartMs,
             endMs: Math.max(cueStartMs + 1, cursorMs),
-            text: cue.text,
+            text: stripInlinePauses(cue.text),
           })
         }
 
@@ -1125,20 +1287,23 @@ export function buildVoiceTools(
       }
 
       const inputFile = optionalString(args, 'inputFile')
+      let rawSourceMarkdown = ''
+      let shouldClean = false
       let finalText: string
       if (inputFile !== undefined) {
         const resolvedInput = assertWorkspaceFile(inputFile, cwd, '文稿文件')
-        const rawText = readFileSync(resolvedInput, 'utf8')
-        const shouldClean = typeof args.cleanMarkdown === 'boolean'
+        rawSourceMarkdown = readFileSync(resolvedInput, 'utf8')
+        shouldClean = typeof args.cleanMarkdown === 'boolean'
           ? args.cleanMarkdown
           : /\.(md|markdown)$/i.test(resolvedInput)
-        finalText = (shouldClean ? cleanMarkdownForSpeech(rawText) : rawText).trim()
+        finalText = (shouldClean ? cleanMarkdownForSpeech(rawSourceMarkdown) : rawSourceMarkdown).trim()
         if (finalText === '') {
           throw new Error(shouldClean ? '文稿文件在清理 Markdown 后内容为空。' : '文稿文件内容为空。')
         }
       } else {
-        const rawText = requiredString(args, 'text', '要合成的文本')
-        finalText = args.cleanMarkdown === true ? cleanMarkdownForSpeech(rawText).trim() : rawText
+        rawSourceMarkdown = requiredString(args, 'text', '要合成的文本')
+        shouldClean = typeof args.cleanMarkdown === 'boolean' ? args.cleanMarkdown : true
+        finalText = args.cleanMarkdown === true ? cleanMarkdownForSpeech(rawSourceMarkdown).trim() : rawSourceMarkdown
         if (finalText === '') throw new Error('要合成的文本在清理 Markdown 后为空。')
       }
 
@@ -1161,6 +1326,127 @@ export function buildVoiceTools(
       assertProsody(spec.rate, spec.pitch)
       resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd)
       if (subtitleOutput !== undefined) resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd)
+      if (chaptersOutput !== undefined) resolveOutputPath(chaptersOutput, '', cfg.overwrite, cwd)
+
+      const checkMarkdownChapters = (inputFile !== undefined && /\.(md|markdown)$/i.test(inputFile)) || chaptersOutput !== undefined
+      const mdSections = checkMarkdownChapters ? extractMarkdownSections(rawSourceMarkdown, shouldClean) : []
+      if (mdSections.length >= 2 || (mdSections.length >= 1 && chaptersOutput !== undefined)) {
+        const activeSections = mdSections
+          .map((sec) => ({ title: sec.title, text: sec.text, chunks: splitTextIntoChunks(sec.text, 2800) }))
+          .filter((sec) => sec.chunks.length > 0)
+        if (activeSections.length > 0) {
+          const secTasks: Array<{ secIndex: number; text: string }> = []
+          for (let s = 0; s < activeSections.length; s++) {
+            for (const chunkText of activeSections[s].chunks) {
+              secTasks.push({ secIndex: s, text: chunkText })
+            }
+          }
+          const secResults = await mapLimit(secTasks, TTS_CHUNK_CONCURRENCY, signal, (task) =>
+            synthesizeChunk(
+              cfg,
+              useEdge,
+              task.text,
+              spec.voice,
+              spec.rate,
+              spec.pitch,
+              needSubtitles,
+              signal,
+              spec.instructions,
+              spec.references,
+              mergedPronunciations,
+              subtitleOpts,
+            ),
+          )
+          throwIfAborted(signal)
+
+          const sectionBuffers: Buffer[] = []
+          const chapters: AudioChapter[] = []
+          const allCues: SubtitleCue[] = []
+          const allWordCues: SubtitleCue[] = []
+          let audioOffsetMs = 0
+          let cueOffsetMs = 0
+          let cueIndex = 1
+          let wordCueIndex = 1
+          let taskCursor = 0
+          let detectedSampleRate = 24000
+
+          for (let s = 0; s < activeSections.length; s++) {
+            const sec = activeSections[s]
+            const chunkBuffers: Buffer[] = []
+            const secStartMs = audioOffsetMs
+
+            for (let c = 0; c < sec.chunks.length; c++) {
+              const res = secResults[taskCursor++]
+              chunkBuffers.push(res.audio)
+              const chunkInfo = inspectMp3Buffer(res.audio)
+              if (chunkInfo.frameCount > 0) detectedSampleRate = chunkInfo.sampleRate
+              if (needSubtitles) {
+                const shifted = offsetCues(res.cues, cueOffsetMs, cueIndex)
+                allCues.push(...shifted)
+                cueIndex += shifted.length
+                if (res.wordCues !== undefined && res.wordCues.length > 0) {
+                  const shiftedWords = offsetCues(res.wordCues, cueOffsetMs, wordCueIndex)
+                  allWordCues.push(...shiftedWords)
+                  wordCueIndex += shiftedWords.length
+                }
+                const cueSpan = shifted.length > 0 ? Math.max(0, shifted[shifted.length - 1].endMs - cueOffsetMs) : 0
+                cueOffsetMs += Math.max(chunkInfo.durationMs, cueSpan)
+              }
+            }
+
+            const secAudio = chunkBuffers.length === 1 ? chunkBuffers[0] : concatMp3Buffers(chunkBuffers)
+            sectionBuffers.push(secAudio)
+            const secDurationMs = inspectMp3Buffer(secAudio).durationMs
+            const secEndMs = secStartMs + secDurationMs
+            chapters.push({
+              title: sec.title,
+              startMs: secStartMs,
+              endMs: secEndMs,
+            })
+            audioOffsetMs = secEndMs
+            if (needSubtitles) cueOffsetMs = Math.max(cueOffsetMs, audioOffsetMs)
+
+            if (s < activeSections.length - 1) {
+              const gap = createSilenceMp3(350, detectedSampleRate)
+              if (gap.length > 0) {
+                sectionBuffers.push(gap)
+                const gapMs = inspectMp3Buffer(gap).durationMs
+                audioOffsetMs += gapMs
+                cueOffsetMs += gapMs
+              }
+            }
+          }
+
+          let audio = sectionBuffers.length === 1 ? sectionBuffers[0] : concatMp3Buffers(sectionBuffers)
+          throwIfAborted(signal)
+          audio = await finalizeVoiceAudio(audio, bgmPath, bgmVolume, bgmDucking, normalizeLoudness, signal)
+          audio = embedMp3Chapters(audio, chapters, { title: activeSections[0].title })
+          const finalInfo = inspectMp3Buffer(audio)
+          const durationMs = finalInfo.durationMs
+          const durationSec = Math.round(durationMs / 100) / 10
+          const output = writeWorkspaceFile(resolveOutputPath(requested, 'voice_output.mp3', cfg.overwrite, cwd), audio, cwd, undefined, cfg.overwrite)
+          let subtitleFile = ''
+          if (subtitleOutput !== undefined) {
+            const formatted = formatSubtitles(allCues, subtitleFormatOf(subtitleOutput), allWordCues)
+            subtitleFile = writeWorkspaceFile(resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd), formatted, cwd, undefined, cfg.overwrite)
+          }
+          const chaptersFile = writeChaptersOutput(chapters)
+          return {
+            output,
+            bytes: audio.length,
+            durationMs,
+            durationSec,
+            voice: spec.voice,
+            rate: spec.rate,
+            pitch: spec.pitch,
+            textLength: finalText.length,
+            chunks: secTasks.length,
+            subtitleFile,
+            chapters,
+            ...(chaptersFile !== '' ? { chaptersFile } : {}),
+          }
+        }
+      }
 
       let audio: Buffer
       let chunkCount = 1
@@ -1173,23 +1459,30 @@ export function buildVoiceTools(
         const chunks = splitTextIntoChunks(finalText, 2800)
         chunkCount = chunks.length
         const results = await mapLimit(chunks, TTS_CHUNK_CONCURRENCY, signal, (chunk) =>
-          synthesizeChunk(cfg, useEdge, chunk, spec.voice, spec.rate, spec.pitch, needSubtitles, signal, spec.instructions, spec.references, mergedPronunciations),
+          synthesizeChunk(cfg, useEdge, chunk, spec.voice, spec.rate, spec.pitch, needSubtitles, signal, spec.instructions, spec.references, mergedPronunciations, subtitleOpts),
         )
         throwIfAborted(signal)
         audio = results.length === 1 ? results[0].audio : concatMp3Buffers(results.map((r) => r.audio))
         if (subtitleOutput !== undefined) {
           const allCues: SubtitleCue[] = []
+          const allWordCues: SubtitleCue[] = []
           let offsetMs = 0
           let cueIndex = 1
+          let wordCueIndex = 1
           for (const res of results) {
             const shifted = offsetCues(res.cues, offsetMs, cueIndex)
             allCues.push(...shifted)
             cueIndex += shifted.length
+            if (res.wordCues !== undefined && res.wordCues.length > 0) {
+              const shiftedWords = offsetCues(res.wordCues, offsetMs, wordCueIndex)
+              allWordCues.push(...shiftedWords)
+              wordCueIndex += shiftedWords.length
+            }
             const chunkDurationMs = inspectMp3Buffer(res.audio).durationMs
             const cueSpan = shifted.length > 0 ? Math.max(0, shifted[shifted.length - 1].endMs - offsetMs) : 0
             offsetMs += Math.max(chunkDurationMs, cueSpan)
           }
-          const formatted = formatSubtitles(allCues, subtitleFormatOf(subtitleOutput))
+          const formatted = formatSubtitles(allCues, subtitleFormatOf(subtitleOutput), allWordCues)
           subtitleFile = writeWorkspaceFile(resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd), formatted, cwd, undefined, cfg.overwrite)
         }
       }
@@ -1208,15 +1501,15 @@ export function buildVoiceTools(
   const voiceStt: VoiceToolDefinition = {
     name: 'voice_stt',
     isConcurrencySafe: () => !getCfg().overwrite,
-    description: '语音转文字：调用 OpenAI 兼容 ASR 接口（默认 Groq whisper-large-v3-turbo；可切 openai/siliconflow/custom）。audio 为音频文件路径（mp3/wav/m4a/ogg/flac，≤25MB；超过 25MB 可设 autoCompress=true 用 ffmpeg 自动压缩分段）；支持多人说话人区分 diarize=true（双声道按声道分离或推断说话人切换）；language/prompt 可选；output 可写 .txt，subtitleOutput 可写 .srt/.vtt 字幕。',
+    description: '语音转文字：调用 OpenAI 兼容 ASR 接口（默认 Groq whisper-large-v3-turbo；可切 openai/siliconflow/custom）。audio 支持音频文件（mp3/wav/m4a/ogg/flac/webm，≤25MB；超过 25MB 可设 autoCompress=true 用 ffmpeg 自动压缩分段）及视频容器（mp4/mkv/mov/avi，在有 ffmpeg 时自动剥离视频轨提取轻量单声道音频）；支持多人说话人区分 diarize=true（双声道按声道分离或推断说话人切换）；language/prompt 可选；output 可写 .txt，subtitleOutput 可写 .srt/.vtt/.ass 字幕。',
     parameters: compileParameters({
-      audio: { type: 'string', required: true, description: '音频文件路径（必填）。' },
-      engine: { type: 'string', enum: ['groq', 'openai', 'custom'], description: '引擎（可选）：只接受与配置 asrEngine 相同的值，用于显式确认；接口地址与密钥始终取配置。' },
+      audio: { type: 'string', required: true, description: '音频或视频文件路径（必填，支持 mp3/wav/m4a/ogg/flac/webm 及 mp4/mkv/mov/avi 视频自动提取音轨）。' },
+      engine: { type: 'string', enum: ['groq', 'openai', 'siliconflow', 'custom'], description: '引擎（可选）：只接受与配置 asrEngine 相同的值，用于显式确认；接口地址与密钥始终取配置。' },
       model: { type: 'string', description: '模型名（可选，覆盖配置）。' },
       language: { type: 'string', description: '语言提示，如 zh（可选）。' },
       prompt: { type: 'string', description: '提示词（专有名词/术语纠偏，可选）。' },
       output: { type: 'string', description: '把转写文本写成 .txt 的路径（可选，相对路径按会话工作目录解析）。' },
-      subtitleOutput: { type: 'string', description: '导出字幕路径（可选，.srt 或 .vtt，相对路径按会话工作目录解析；指定时自动开启时间戳）。' },
+      subtitleOutput: { type: 'string', description: '导出字幕路径（可选，.srt、.vtt 或 .ass，相对路径按会话工作目录解析；指定时自动开启时间戳）。' },
       timestamps: { type: 'boolean', description: '是否请求分段时间戳（可选，默认 false）。' },
       diarize: { type: 'boolean', description: '是否启用多人说话人区分（可选，默认 false；双声道录音在有 ffmpeg 时可按声道分离，或解析/推断说话人切换并输出 [说话人 A] 标记）。' },
       autoCompress: { type: 'boolean', description: '超过 25MB 时是否自动调用本地 ffmpeg 压缩与分段转写（可选，默认 false）。' },
@@ -1243,7 +1536,7 @@ export function buildVoiceTools(
       const audioPath = assertAudioFile(requiredString(args, 'audio', '音频文件'), cwd)
       const requestedEngine = optionalString(args, 'engine')
       if (requestedEngine !== undefined && !['groq', 'openai', 'siliconflow', 'custom'].includes(requestedEngine)) {
-        throw new Error('engine 必须是 groq / openai / custom 之一（当前：' + requestedEngine + '）。')
+        throw new Error('engine 必须是 groq / openai / siliconflow / custom 之一（当前：' + requestedEngine + '）。')
       }
       if (requestedEngine !== undefined && requestedEngine !== cfg.asrEngine) {
         throw new Error('voice_stt 不支持用 engine 参数临时换引擎（配置 asrEngine=' + cfg.asrEngine + '，本次传入 ' + requestedEngine + '）。接口地址与密钥是一组配置，混着用会把密钥发到非预期的服务；如需切换请在 DSH「设置 → 插件 → 语音」修改 asrEngine / asrBaseUrl（保存即生效）。')
@@ -1277,15 +1570,21 @@ export function buildVoiceTools(
       }
 
       const fileSize = statSync(audioPath).size
+      const isVideo = isVideoContainerFile(audioPath)
       let text = ''
       let detectedLanguage = ''
       let duration: number | undefined
       let segments: SttSegment[] | undefined
       let speakers: string[] | undefined
 
-      if (fileSize > MAX_ASR_BYTES) {
-        if (args.autoCompress !== true) assertAudioSize(fileSize)
+      if (fileSize > MAX_ASR_BYTES || (isVideo && (deps.prepareAudio !== undefined || (deps.stt === undefined && hasFfmpeg())))) {
+        if (fileSize > MAX_ASR_BYTES && !isVideo && args.autoCompress !== true) {
+          assertAudioSize(fileSize)
+        }
         if (deps.prepareAudio === undefined && !hasFfmpeg()) {
+          if (isVideo) {
+            throw new Error('视频文件超过 25MB 且未检测到本机 ffmpeg；请先安装 ffmpeg（或使用 dsh-ffmpeg 提取音轨）以便自动剥离视频流后转写。')
+          }
           throw new Error('音频超过 25MB，且未检测到 ffmpeg；请先安装 ffmpeg（或使用 dsh-ffmpeg 压缩），再启用 autoCompress=true。')
         }
         const prep = await raceAbort((deps.prepareAudio ?? prepareAudioForAsr)(audioPath, signal), signal)
@@ -1460,7 +1759,24 @@ export function buildVoiceTools(
         const cueSegments: SttSegment[] = segments !== undefined && segments.length > 0
           ? segments
           : [{ id: 1, start: 0, end: duration !== undefined && duration > 0 ? duration : 5, text }]
-        const subText = formatSttSubtitles(cueSegments, subtitleFormatOf(subtitleOutput))
+        const sttSubFmt = subtitleFormatOf(subtitleOutput)
+        const subText = sttSubFmt === 'ass'
+          ? formatSubtitles(
+              cueSegments
+                .filter((seg) => seg.text.trim() !== '')
+                .map((seg, idx) => {
+                  const clean = seg.text.trim()
+                  const speaker = typeof seg.speaker === 'string' ? seg.speaker.trim() : ''
+                  return {
+                    index: idx + 1,
+                    startMs: Math.max(0, Math.round(seg.start * 1000)),
+                    endMs: Math.max(1, Math.round(seg.end * 1000)),
+                    text: speaker !== '' ? `[${speaker}] ${clean}` : clean,
+                  }
+                }),
+              'ass',
+            )
+          : formatSttSubtitles(cueSegments, sttSubFmt)
         subtitleFile = writeWorkspaceFile(resolveOutputPath(subtitleOutput, '', cfg.overwrite, cwd), subText, cwd, 0o600, cfg.overwrite)
       }
 

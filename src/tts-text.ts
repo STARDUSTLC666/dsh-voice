@@ -357,12 +357,65 @@ export function createSilenceMp3(durationMs: number, sampleRate = 24000): Buffer
 }
 
 /**
- * 拼接多段 MP3：保留首段完整头部，后续段剥离 ID3v2 后拼接。
+ * 剥离单段 MP3 的首尾 ID3 标签以及首帧 Xing / Info / VBRI 元数据空帧，
+ * 避免多段 VBR MP3 拼接后播放器或时长解析器被首段的帧数头锁死。
+ */
+export function stripMp3MetadataFrame(mp3: Buffer): Buffer {
+  let afterId3v2 = stripId3v2(mp3)
+  while (afterId3v2.length < mp3.length) {
+    const next = stripId3v2(afterId3v2)
+    if (next.length === afterId3v2.length) break
+    afterId3v2 = next
+  }
+  const data = stripId3v1(afterId3v2)
+
+  let offset = 0
+  while (offset + 4 <= data.length) {
+    const header = parseMp3FrameHeader(data, offset)
+    if (header === null) {
+      offset += 1
+      continue
+    }
+
+    const xingOffset = offset + 4 + header.sideInfoSize
+    if (xingOffset + 4 <= offset + header.frameSize && xingOffset + 4 <= data.length) {
+      const tag = data.subarray(xingOffset, xingOffset + 4).toString('ascii')
+      if (tag === 'Xing' || tag === 'Info') {
+        return data.subarray(offset + header.frameSize)
+      }
+    }
+
+    const vbriOffset = offset + 36
+    if (vbriOffset + 4 <= offset + header.frameSize && vbriOffset + 4 <= data.length) {
+      const vbriTag = data.subarray(vbriOffset, vbriOffset + 4).toString('ascii')
+      if (vbriTag === 'VBRI') {
+        return data.subarray(offset + header.frameSize)
+      }
+    }
+
+    return data
+  }
+
+  return data
+}
+
+/**
+ * 拼接多段 MP3：单段原样返回；多段拼接时剥离各段的 Xing/Info/VBRI 元数据帧及非首段 ID3 标签。
  */
 export function concatMp3Buffers(buffers: Buffer[]): Buffer {
   const nonEmpty = buffers.filter((buf) => buf.length > 0)
   if (nonEmpty.length === 0) return Buffer.alloc(0)
-  const normalized = nonEmpty.map((buf, index) => (index === 0 ? buf : stripId3v2(buf)))
+  if (nonEmpty.length === 1) return nonEmpty[0]
+  const normalized = nonEmpty.map((buf, index) => {
+    if (index === 0) {
+      const afterId3 = stripId3v2(buf)
+      if (afterId3.length < buf.length) {
+        const id3Prefix = buf.subarray(0, buf.length - afterId3.length)
+        return Buffer.concat([id3Prefix, stripMp3MetadataFrame(afterId3)])
+      }
+    }
+    return stripMp3MetadataFrame(buf)
+  })
   return Buffer.concat(normalized)
 }
 
@@ -385,6 +438,102 @@ export function offsetCues(cues: SubtitleCue[], offsetMs: number, startIndex = 1
   }))
 }
 
+/** 字幕切分粒度：整句、短视频紧凑短句或逐词。 */
+export type SubtitleGranularity = 'sentence' | 'clause' | 'word'
+
+function measureCueTextWeight(text: string): number {
+  let weight = 0
+  for (const ch of text) {
+    if (/\s/.test(ch)) continue
+    const cp = ch.codePointAt(0) ?? 0
+    weight += cp <= 0x00ff ? 0.5 : 1
+  }
+  return weight
+}
+
+/**
+ * 将词级时间轴按目标粒度重组：
+ * - `'word'`：逐词编号返回；
+ * - `'sentence'`：保持原条目重新编号；
+ * - `'clause'`：按显示字重上限（CJK 计 1，ASCII 计 0.5）、停顿间隙（>=350ms）与子句标点智能聚合成紧凑短句。
+ */
+export function groupWordCues(
+  wordCues: readonly SubtitleCue[],
+  granularity: SubtitleGranularity,
+  maxCharsPerCue = 16,
+): SubtitleCue[] {
+  if (!Array.isArray(wordCues) || wordCues.length === 0) return []
+  if (granularity === 'sentence') {
+    return wordCues.map((cue, idx) => ({
+      index: idx + 1,
+      startMs: cue.startMs,
+      endMs: cue.endMs,
+      text: cue.text,
+    }))
+  }
+
+  const nonEmpty = wordCues.filter((cue) => typeof cue.text === 'string' && cue.text.trim() !== '')
+  if (nonEmpty.length === 0) return []
+  if (granularity === 'word') {
+    return nonEmpty.map((cue, idx) => ({
+      index: idx + 1,
+      startMs: cue.startMs,
+      endMs: cue.endMs,
+      text: cue.text.trim(),
+    }))
+  }
+
+  const limit = Math.max(4, Number.isFinite(maxCharsPerCue) ? maxCharsPerCue : 16)
+  const groups: Array<{ startMs: number; endMs: number; text: string }> = []
+  let curStartMs = 0
+  let curEndMs = 0
+  let curText = ''
+  let curWeight = 0
+  let prevCue: SubtitleCue | null = null
+
+  for (const cue of nonEmpty) {
+    const word = cue.text.trim()
+    const wWeight = measureCueTextWeight(word)
+    const isStandalonePunct = /^[。！？；，、.!?;,:：]+$/.test(word)
+
+    if (prevCue !== null) {
+      const exceedsWeight = !isStandalonePunct && curWeight + wWeight > limit
+      const hasPauseGap = cue.startMs - prevCue.endMs >= 350
+      const endedClause = /[。！？；，、.!?;,:：]$/.test(curText)
+      if (exceedsWeight || hasPauseGap || endedClause) {
+        groups.push({ startMs: curStartMs, endMs: curEndMs, text: curText })
+        curStartMs = cue.startMs
+        curEndMs = Math.max(cue.startMs, cue.endMs)
+        curText = word
+        curWeight = wWeight
+        prevCue = cue
+        continue
+      }
+      curText += (needsSpaceBetween(curText, word) ? ' ' : '') + word
+      curEndMs = Math.max(curEndMs, cue.endMs)
+      curWeight += wWeight
+      prevCue = cue
+    } else {
+      curStartMs = cue.startMs
+      curEndMs = Math.max(cue.startMs, cue.endMs)
+      curText = word
+      curWeight = wWeight
+      prevCue = cue
+    }
+  }
+
+  if (prevCue !== null && curText !== '') {
+    groups.push({ startMs: curStartMs, endMs: curEndMs, text: curText })
+  }
+
+  return groups.map((g, idx) => ({
+    index: idx + 1,
+    startMs: g.startMs,
+    endMs: g.endMs,
+    text: g.text,
+  }))
+}
+
 function formatSubtitleTimestamp(ms: number, decimalSep: ',' | '.'): string {
   const safe = Math.max(0, Math.round(ms))
   const hours = Math.floor(safe / 3600000)
@@ -397,10 +546,104 @@ function formatSubtitleTimestamp(ms: number, decimalSep: ',' | '.'): string {
     + decimalSep + String(millis).padStart(3, '0')
 }
 
+function formatAssTimestamp(ms: number): string {
+  const totalCs = Math.max(0, Math.round(ms / 10))
+  const cs = totalCs % 100
+  const totalSec = Math.floor(totalCs / 100)
+  const sec = totalSec % 60
+  const totalMin = Math.floor(totalSec / 60)
+  const min = totalMin % 60
+  const hours = Math.floor(totalMin / 60)
+  return `${hours}:${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`
+}
+
+function escapeAssText(text: string): string {
+  return text
+    .replace(/\r\n?/g, '\n')
+    .replace(/\{/g, '\\{')
+    .replace(/\}/g, '\\}')
+    .replace(/\n/g, '\\N')
+}
+
 /**
- * 将字幕条目格式化为 SRT 或 WebVTT 文本。
+ * 将字幕格式化为 SubStation Alpha (`v4.00+` `.ass`) 文本；
+ * 若同时提供词级时间轴 `wordCues`，自动生成带 `{\kf<cs>}` 逐词高亮标签的卡拉 OK 字幕。
  */
-export function formatSubtitles(cues: SubtitleCue[], format: 'srt' | 'vtt'): string {
+export function formatAssSubtitles(
+  cues: readonly SubtitleCue[],
+  wordCues?: readonly SubtitleCue[],
+): string {
+  const headerLines = [
+    '[Script Info]',
+    'Title: dsh-voice Subtitles',
+    'ScriptType: v4.00+',
+    'WrapStyle: 0',
+    'ScaledBorderAndShadow: yes',
+    'PlayResX: 1080',
+    'PlayResY: 1920',
+    '',
+    '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    'Style: Default,Microsoft YaHei,58,&H0000FFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,60,60,180,1',
+    '',
+    '[Events]',
+    'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+  ]
+
+  const hasWords = Array.isArray(wordCues) && wordCues.length > 0
+  const dialogues: string[] = []
+
+  for (const cue of cues) {
+    const startStr = formatAssTimestamp(cue.startMs)
+    const endStr = formatAssTimestamp(Math.max(cue.startMs, cue.endMs))
+
+    let renderedText = ''
+    if (hasWords) {
+      const matching = wordCues!.filter(
+        (w) =>
+          typeof w.text === 'string'
+          && w.text.trim() !== ''
+          && ((w.endMs > cue.startMs && w.startMs < cue.endMs)
+            || (w.startMs === w.endMs && w.startMs >= cue.startMs && w.startMs <= cue.endMs)),
+      )
+      if (matching.length > 0) {
+        const speakerMatch = /^(\[[^\]]+\]\s+)/.exec(cue.text)
+        if (speakerMatch && !matching[0].text.trim().startsWith('[')) {
+          renderedText += escapeAssText(speakerMatch[1])
+        }
+        for (let i = 0; i < matching.length; i++) {
+          const w = matching[i]
+          const rawWord = w.text.trim()
+          if (i > 0 && needsSpaceBetween(matching[i - 1].text.trim(), rawWord)) {
+            renderedText += ' '
+          }
+          const durCs = Math.max(1, Math.round((w.endMs - w.startMs) / 10))
+          renderedText += `{\\kf${durCs}}${escapeAssText(rawWord)}`
+        }
+      }
+    }
+
+    if (renderedText === '') {
+      renderedText = escapeAssText(cue.text)
+    }
+
+    dialogues.push(`Dialogue: 0,${startStr},${endStr},Default,,0,0,0,,${renderedText}`)
+  }
+
+  return [...headerLines, ...dialogues].join('\n') + '\n'
+}
+
+/**
+ * 将字幕条目格式化为 SRT、WebVTT 或 ASS（支持卡拉 OK 词级高亮）文本。
+ */
+export function formatSubtitles(
+  cues: readonly SubtitleCue[],
+  format: 'srt' | 'vtt' | 'ass',
+  wordCues?: readonly SubtitleCue[],
+): string {
+  if (format === 'ass') {
+    return formatAssSubtitles(cues, wordCues)
+  }
   if (format === 'vtt') {
     if (cues.length === 0) return 'WEBVTT\n\n'
     const blocks = cues.map((cue) =>
@@ -620,9 +863,39 @@ export function scaleRatePercent(baseRate: string, factor: number): string {
   return (percent >= 0 ? '+' : '') + String(percent) + '%'
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * 构造词边界安全的发音词典全局正则：
+ * - 按词长降序去重排序，避免短词抢先截断长词；
+ * - 纯 ASCII 单词/缩写（`OS` / `UI` / `SQL` / `Nginx`）自动包裹 `(?<![A-Za-z0-9_])...(?![A-Za-z0-9_])`，
+ *   使其匹配独立单词与中英混排（如 `"Mac OS"`、`"OS系统"`），但绝不误伤 `"POST"` / `"BUILD"` 等单词内部子串。
+ */
+export function buildPronunciationPattern(words: readonly string[]): RegExp | null {
+  if (!Array.isArray(words) || words.length === 0) return null
+  const unique = Array.from(
+    new Set(
+      words
+        .filter((w): w is string => typeof w === 'string')
+        .map((w) => w.trim())
+        .filter((w) => w.length > 0),
+    ),
+  ).sort((a, b) => b.length - a.length)
+  if (unique.length === 0) return null
+  const alternatives = unique.map((word) => {
+    const escaped = escapeRegExp(word)
+    return /^[A-Za-z0-9_]+$/.test(word)
+      ? `(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`
+      : escaped
+  })
+  return new RegExp(alternatives.join('|'), 'g')
+}
+
 /**
  * 纯文本单遍发音词典替换（用于不支持 SSML `<sub alias>` 的 OpenAI / SiliconFlow 引擎）。
- * 按原词长度降序构造单次正则同步替换，保证替读结果不会递归触发其它规则。
+ * 按原词长度降序构造单次正则同步替换，保证替读结果不会递归触发其它规则且保护 ASCII 词边界。
  */
 export function applyPronunciationsPlain(
   text: string,
@@ -638,10 +911,91 @@ export function applyPronunciationsPlain(
       map.set(word, alias)
     }
   }
-  if (map.size === 0) return text
-  const sortedWords = Array.from(map.keys()).sort((a, b) => b.length - a.length)
-  const regex = new RegExp(sortedWords.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g')
+  const regex = buildPronunciationPattern(Array.from(map.keys()))
+  if (regex === null) return text
   return text.replace(regex, (matched) => map.get(matched) ?? matched)
+}
+
+/** 行内停顿切分片段：朗读文本块或毫秒级停顿块。 */
+export type SpeechPiece =
+  | { kind: 'text'; text: string }
+  | { kind: 'pause'; durationMs: number }
+
+const INLINE_PAUSE_SOURCE = '\\[(?:pause|break|停顿)\\s*[:：=]?\\s*(\\d+(?:\\.\\d+)?)\\s*(ms|s|秒|毫秒)?\\]'
+
+function parseInlinePauseMs(rawNum: string, rawUnit: string | undefined): number {
+  const value = Number(rawNum)
+  const unit = (rawUnit ?? 'ms').toLowerCase()
+  const ms = unit === 's' || unit === '秒' ? value * 1000 : value
+  if (!Number.isFinite(ms)) return 500
+  return Math.min(10000, Math.max(50, Math.round(ms)))
+}
+
+/**
+ * 解析并切分行内停顿标签（如 `[pause:500ms]`、`[break:600ms]`、`[停顿0.6s]`），
+ * 返回非空文本与停顿交替序列（自动合并相邻停顿并钳制在 50..10000ms）。
+ */
+export function splitInlinePauses(text: string): SpeechPiece[] {
+  if (typeof text !== 'string' || text === '') return []
+  const re = new RegExp(INLINE_PAUSE_SOURCE, 'gi')
+  const pieces: SpeechPiece[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  const pushPause = (durationMs: number) => {
+    const prev = pieces[pieces.length - 1]
+    if (prev && prev.kind === 'pause') {
+      prev.durationMs = Math.min(10000, prev.durationMs + durationMs)
+    } else {
+      pieces.push({ kind: 'pause', durationMs })
+    }
+  }
+
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      const part = text.slice(lastIndex, match.index).trim()
+      if (part !== '') {
+        pieces.push({ kind: 'text', text: part })
+      }
+    }
+    pushPause(parseInlinePauseMs(match[1], match[2]))
+    lastIndex = match.index + match[0].length
+  }
+
+  if (lastIndex < text.length) {
+    const tail = text.slice(lastIndex).trim()
+    if (tail !== '') {
+      pieces.push({ kind: 'text', text: tail })
+    }
+  }
+
+  return pieces
+}
+
+/**
+ * 剥离行内停顿标签并折叠周围多余水平空白，生成干净的字幕展示文本。
+ */
+export function stripInlinePauses(text: string): string {
+  if (typeof text !== 'string' || text === '') return ''
+  const re = new RegExp(INLINE_PAUSE_SOURCE, 'gi')
+  const replaced = text.replace(re, (matched, _num, _unit, offset: number, full: string) => {
+    const before = full.slice(0, offset)
+    const after = full.slice(offset + matched.length)
+    if (
+      before !== ''
+      && after !== ''
+      && !/[ \t\r\n]$/.test(before)
+      && !/^[ \t\r\n]/.test(after)
+      && needsSpaceBetween(before, after)
+    ) {
+      return ' '
+    }
+    return ''
+  })
+  return replaced
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/^[ \t]+|[ \t]+$/gm, '')
+    .trim()
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -671,6 +1025,62 @@ function runFfmpegArgs(args: string[], errorPrefix: string, signal?: AbortSignal
       },
     )
   })
+}
+
+/**
+ * 使用本地 ffmpeg `atempo` 滤镜对超窗 MP3 进行保调精准变速压缩，确保字幕时间窗零累积漂移。
+ */
+export async function fitAudioToWindow(mp3: Buffer, targetMaxMs: number, signal?: AbortSignal): Promise<Buffer> {
+  throwIfAborted(signal)
+  if (mp3.length === 0 || !Number.isFinite(targetMaxMs) || targetMaxMs <= 50) {
+    return mp3
+  }
+  const info = inspectMp3Buffer(mp3)
+  if (info.durationMs <= targetMaxMs) {
+    return mp3
+  }
+
+  const ratio = info.durationMs / targetMaxMs
+  const atempoFilter = ratio <= 2.0
+    ? `atempo=${ratio.toFixed(4)}`
+    : `atempo=2.0,atempo=${Math.min(2.0, ratio / 2).toFixed(4)}`
+  const targetRate = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000].includes(info.sampleRate)
+    ? info.sampleRate
+    : 24000
+  const bitrateArg = String(Math.min(320, Math.max(32, info.bitrateKbps || 48))) + 'k'
+
+  const tempDir = mkdtempSync(join(tmpdir(), 'dsh-voice-atempo-'))
+  try {
+    const inPath = join(tempDir, 'in.mp3')
+    const outPath = join(tempDir, 'out.mp3')
+    writeFileSync(inPath, mp3)
+    await runFfmpegArgs(
+      [
+        '-y',
+        '-i', inPath,
+        '-vn',
+        '-af', atempoFilter,
+        '-ar', String(targetRate),
+        '-ac', String(info.channels),
+        '-b:a', bitrateArg,
+        outPath,
+      ],
+      'ffmpeg 语速窗口对齐失败：',
+      signal,
+    )
+    throwIfAborted(signal)
+    const fitted = readFileSync(outPath)
+    if (fitted.length === 0) {
+      throw new Error('ffmpeg 语速窗口对齐结果为空。')
+    }
+    return fitted
+  } finally {
+    try {
+      rmSync(tempDir, { recursive: true, force: true })
+    } catch {
+      // 尽力清理临时目录
+    }
+  }
 }
 
 /**
@@ -778,4 +1188,168 @@ export async function mixAudioWithBgm(voiceMp3: Buffer, opts: BgmMixOptions, sig
       // 尽力清理临时目录
     }
   }
+}
+
+/** 音频章节时间轴条目（毫秒级）。 */
+export interface AudioChapter {
+  title: string
+  startMs: number
+  endMs: number
+}
+
+/** Markdown 标题分节结果。 */
+export interface MarkdownSection {
+  title: string
+  text: string
+}
+
+/**
+ * 按一级至三级 Markdown 标题（`#` / `##` / `###`）提取有声书/播客章节：
+ * 先剥离围栏代码块以避免将代码注释误判为标题；首标题前若有正文则归入 `导言` 章节。
+ */
+export function extractMarkdownSections(markdown: string, cleanMarkdown = true): MarkdownSection[] {
+  if (typeof markdown !== 'string' || markdown.trim() === '') return []
+  let src = markdown.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
+  src = src.replace(/```[\s\S]*?```/g, '').replace(/~~~[\s\S]*?~~~/g, '')
+
+  const headingRe = /^(#{1,3})\s+(.+)$/gm
+  const matches: Array<{ index: number; fullLength: number; rawTitle: string }> = []
+  let m: RegExpExecArray | null
+  while ((m = headingRe.exec(src)) !== null) {
+    matches.push({
+      index: m.index,
+      fullLength: m[0].length,
+      rawTitle: m[2].replace(/\s+#+\s*$/, '').trim(),
+    })
+  }
+  if (matches.length === 0) return []
+
+  const sections: MarkdownSection[] = []
+  const rawIntro = src.slice(0, matches[0].index)
+  const cleanedIntro = cleanMarkdown ? cleanMarkdownForSpeech(rawIntro) : rawIntro.trim()
+  if (cleanedIntro !== '') {
+    sections.push({ title: '导言', text: cleanedIntro })
+  }
+
+  for (let i = 0; i < matches.length; i++) {
+    const cur = matches[i]
+    const bodyStart = cur.index + cur.fullLength
+    const bodyEnd = i + 1 < matches.length ? matches[i + 1].index : src.length
+    const rawBody = src.slice(bodyStart, bodyEnd)
+    const cleanedTitle = (cleanMarkdown ? cleanMarkdownForSpeech(cur.rawTitle) : cur.rawTitle).trim() || cur.rawTitle
+    const cleanedBody = cleanMarkdown ? cleanMarkdownForSpeech(rawBody) : rawBody.trim()
+    if (cleanedTitle === '' && cleanedBody === '') continue
+
+    const combined = cleanedBody !== ''
+      ? (/[。！？.!?]$/.test(cleanedTitle) ? `${cleanedTitle}\n${cleanedBody}` : `${cleanedTitle}。\n${cleanedBody}`)
+      : cleanedTitle
+    if (combined.trim() !== '') {
+      sections.push({ title: cleanedTitle, text: combined })
+    }
+  }
+
+  return sections
+}
+
+function encodeId3v23Frame(frameId: string, payload: Buffer): Buffer {
+  const header = Buffer.alloc(10)
+  header.write(frameId, 0, 4, 'ascii')
+  header.writeUInt32BE(payload.length, 4)
+  header[8] = 0x00
+  header[9] = 0x00
+  return Buffer.concat([header, payload])
+}
+
+function encodeTit2Frame(title: string): Buffer {
+  const textBytes = Buffer.from(title, 'utf16le')
+  const payload = Buffer.alloc(3 + textBytes.length + 2)
+  payload[0] = 0x01 // UTF-16 with BOM
+  payload[1] = 0xff
+  payload[2] = 0xfe
+  textBytes.copy(payload, 3)
+  payload[3 + textBytes.length] = 0x00
+  payload[3 + textBytes.length + 1] = 0x00
+  return encodeId3v23Frame('TIT2', payload)
+}
+
+/**
+ * 纯 TypeScript 零依赖向 MP3 写入原生 ID3v2.3 `CTOC` + `CHAP` 章节书签标签（兼容 Apple Podcasts / VLC / ffmpeg / 车载播放器）。
+ */
+export function embedMp3Chapters(
+  mp3: Buffer,
+  chapters: readonly AudioChapter[],
+  meta?: { title?: string },
+): Buffer {
+  if (mp3.length === 0 || !Array.isArray(chapters) || chapters.length === 0) {
+    return mp3
+  }
+
+  let body = stripId3v2(mp3)
+  while (body.length < mp3.length) {
+    const next = stripId3v2(body)
+    if (next.length === body.length) break
+    body = next
+  }
+
+  const capped = chapters.slice(0, 255)
+  const frames: Buffer[] = []
+
+  if (typeof meta?.title === 'string' && meta.title.trim() !== '') {
+    frames.push(encodeTit2Frame(meta.title.trim()))
+  }
+
+  const childIdBuffers = capped.map((_ch, idx) => Buffer.from(`chp${idx}\0`, 'ascii'))
+  const ctocHeader = Buffer.from([0x74, 0x6f, 0x63, 0x31, 0x00, 0x03, capped.length]) // 'toc1\0' + flags(0x03) + count
+  frames.push(encodeId3v23Frame('CTOC', Buffer.concat([ctocHeader, ...childIdBuffers])))
+
+  for (let i = 0; i < capped.length; i++) {
+    const ch = capped[i]
+    const elemId = childIdBuffers[i]
+    const startMs = Math.max(0, Math.round(Number.isFinite(ch.startMs) ? ch.startMs : 0))
+    const endMs = Math.max(startMs, Math.round(Number.isFinite(ch.endMs) ? ch.endMs : startMs))
+    const timing = Buffer.alloc(16)
+    timing.writeUInt32BE(startMs >>> 0, 0)
+    timing.writeUInt32BE(endMs >>> 0, 4)
+    timing.writeUInt32BE(0xffffffff, 8)
+    timing.writeUInt32BE(0xffffffff, 12)
+    const tit2 = encodeTit2Frame(ch.title)
+    frames.push(encodeId3v23Frame('CHAP', Buffer.concat([elemId, timing, tit2])))
+  }
+
+  const tagPayload = Buffer.concat(frames)
+  const len = tagPayload.length
+  const id3Header = Buffer.alloc(10)
+  id3Header[0] = 0x49 // 'I'
+  id3Header[1] = 0x44 // 'D'
+  id3Header[2] = 0x33 // '3'
+  id3Header[3] = 0x03 // v2.3
+  id3Header[4] = 0x00 // revision 0
+  id3Header[5] = 0x00 // flags
+  id3Header[6] = (len >>> 21) & 0x7f
+  id3Header[7] = (len >>> 14) & 0x7f
+  id3Header[8] = (len >>> 7) & 0x7f
+  id3Header[9] = len & 0x7f
+
+  return Buffer.concat([id3Header, tagPayload, body])
+}
+
+/**
+ * 将章节时间轴格式化为播客 Show Notes / YouTube 时间戳文本（`MM:SS 标题` 或跨小时 `HH:MM:SS 标题`）。
+ */
+export function formatChaptersMarkdown(chapters: readonly AudioChapter[]): string {
+  if (!Array.isArray(chapters) || chapters.length === 0) return ''
+  const useHours = chapters.some(
+    (ch) => Math.max(0, Math.round(ch.startMs)) >= 3600000 || Math.max(0, Math.round(ch.endMs)) >= 3600000,
+  )
+  const lines = chapters.map((ch) => {
+    const totalSec = Math.max(0, Math.floor(Math.round(ch.startMs) / 1000))
+    const hours = Math.floor(totalSec / 3600)
+    const minutes = Math.floor((totalSec % 3600) / 60)
+    const seconds = totalSec % 60
+    const stamp = useHours
+      ? `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+      : `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+    return `${stamp} ${ch.title.trim()}`
+  })
+  return lines.join('\n') + '\n'
 }

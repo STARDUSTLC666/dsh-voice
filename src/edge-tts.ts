@@ -9,6 +9,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 import { edgeTokenV2 } from './edge-drm-v2.js'
 import { getProxyWsAgent } from './proxy-fetch.js'
+import { buildPronunciationPattern, splitInlinePauses } from './tts-text.js'
 import { VOICES, type VoiceInfo } from './voices.js'
 
 const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4'
@@ -65,6 +66,10 @@ export interface TtsDeps {
   proxyUrl?: string
   /** 取消信号（可选）；也可通过 synthesizeSpeech 第 4 个参数传入。 */
   signal?: AbortSignal
+  /** 是否显式启用 Keep-Alive WebSocket 连接池（未注入 webSocketFactory 时默认开启）。 */
+  usePool?: boolean
+  /** 瞬态网络断连重试次数（未注入 webSocketFactory 时默认为 1，测试注入时默认为 0）。 */
+  maxRetries?: number
 }
 
 /** unexpected-response 事件中的 HTTP 响应最小面。 */
@@ -78,6 +83,8 @@ export interface UnexpectedResponseInfo {
 export interface WebSocketLike {
   addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void
   addEventListener(type: 'open' | 'close' | 'error', listener: (event?: unknown) => void): void
+  removeEventListener?(type: 'message' | 'open' | 'close' | 'error', listener: (...args: any[]) => void): void
+  readyState?: number
   on?(event: 'unexpected-response', listener: (req: unknown, res: UnexpectedResponseInfo) => void): void
   send(data: string): void
   close(): void
@@ -90,6 +97,175 @@ class ClockSkewRetrySignal extends Error {
   constructor() {
     super('clock-skew-retry')
   }
+}
+
+/** 内部哨兵错误：池中复用的空闲连接在收到任何音频帧前已失效，立即换全新连接重试。 */
+class StalePooledSocketSignal extends Error {
+  constructor() {
+    super('stale-pooled-socket')
+  }
+}
+
+/** 标记可安全重试的瞬态 WebSocket / 握手错误（保留原始中文报错文本）。 */
+class TransientWsError extends Error {}
+
+const POOL_MAX_IDLE_PER_KEY = 2
+const POOL_IDLE_TTL_MS = 15_000
+
+interface PooledTurnHandlers {
+  onOpen?: () => void
+  onMessage?: (event: { data: unknown }) => void
+  onError?: (event?: unknown) => void
+  onClose?: (event?: unknown) => void
+  onUnexpectedResponse?: (req: unknown, res: UnexpectedResponseInfo) => void
+}
+
+interface PooledSocketEntry {
+  socket: WebSocketLike
+  timer: ReturnType<typeof setTimeout>
+  key: string
+  opened: boolean
+  closedOrErrored: boolean
+  handlers: PooledTurnHandlers | null
+}
+
+const edgeConnectionPool = new Map<string, PooledSocketEntry[]>()
+
+function removeFromIdlePool(target: PooledSocketEntry): void {
+  const bucket = edgeConnectionPool.get(target.key)
+  if (!bucket) return
+  const idx = bucket.indexOf(target)
+  if (idx >= 0) {
+    clearTimeout(target.timer)
+    bucket.splice(idx, 1)
+    if (bucket.length === 0) edgeConnectionPool.delete(target.key)
+  }
+}
+
+function isSocketReusable(entry: PooledSocketEntry): boolean {
+  if (entry.closedOrErrored || !entry.opened) return false
+  const rs = (entry.socket as { readyState?: unknown }).readyState
+  if (typeof rs === 'number') {
+    return rs === 1
+  }
+  return true
+}
+
+function createManagedSocketEntry(
+  key: string,
+  factory: WebSocketFactory,
+  url: string,
+  headers: Record<string, string>,
+): PooledSocketEntry {
+  const socket = factory(url, { headers })
+  const dummyTimer = setTimeout(() => {}, 0)
+  clearTimeout(dummyTimer)
+  const entry: PooledSocketEntry = {
+    socket,
+    timer: dummyTimer,
+    key,
+    opened: (socket as { readyState?: unknown }).readyState === 1,
+    closedOrErrored: false,
+    handlers: null,
+  }
+
+  socket.addEventListener('open', () => {
+    entry.opened = true
+    entry.handlers?.onOpen?.()
+  })
+  socket.addEventListener('message', (event) => {
+    entry.handlers?.onMessage?.(event)
+  })
+  socket.addEventListener('error', (event) => {
+    entry.closedOrErrored = true
+    removeFromIdlePool(entry)
+    entry.handlers?.onError?.(event)
+  })
+  socket.addEventListener('close', (event) => {
+    entry.closedOrErrored = true
+    removeFromIdlePool(entry)
+    entry.handlers?.onClose?.(event)
+  })
+  if (typeof socket.on === 'function') {
+    socket.on('unexpected-response', (req, res) => {
+      entry.closedOrErrored = true
+      removeFromIdlePool(entry)
+      entry.handlers?.onUnexpectedResponse?.(req, res)
+    })
+  }
+
+  return entry
+}
+
+function acquirePooledSocket(key: string): PooledSocketEntry | null {
+  const bucket = edgeConnectionPool.get(key)
+  if (!bucket || bucket.length === 0) return null
+
+  while (bucket.length > 0) {
+    const entry = bucket.pop()!
+    clearTimeout(entry.timer)
+    if (bucket.length === 0) edgeConnectionPool.delete(key)
+    if (isSocketReusable(entry)) {
+      return entry
+    }
+    entry.closedOrErrored = true
+    entry.handlers = null
+    try { entry.socket.close() } catch { /* 忽略 */ }
+  }
+  return null
+}
+
+function releaseSocketToPool(entry: PooledSocketEntry): void {
+  entry.handlers = null
+  if (!isSocketReusable(entry)) {
+    entry.closedOrErrored = true
+    try { entry.socket.close() } catch { /* 忽略 */ }
+    return
+  }
+
+  let bucket = edgeConnectionPool.get(entry.key)
+  if (!bucket) {
+    bucket = []
+    edgeConnectionPool.set(entry.key, bucket)
+  }
+  while (bucket.length >= POOL_MAX_IDLE_PER_KEY) {
+    const oldest = bucket.shift()!
+    clearTimeout(oldest.timer)
+    oldest.closedOrErrored = true
+    oldest.handlers = null
+    try { oldest.socket.close() } catch { /* 忽略 */ }
+  }
+
+  const timer = setTimeout(() => {
+    removeFromIdlePool(entry)
+    entry.closedOrErrored = true
+    entry.handlers = null
+    try { entry.socket.close() } catch { /* 忽略 */ }
+  }, POOL_IDLE_TTL_MS)
+  timer.unref?.()
+  entry.timer = timer
+  bucket.push(entry)
+}
+
+function discardSocketEntry(entry: PooledSocketEntry): void {
+  removeFromIdlePool(entry)
+  clearTimeout(entry.timer)
+  entry.closedOrErrored = true
+  entry.handlers = null
+  try { entry.socket.close() } catch { /* 忽略 */ }
+}
+
+/** 关闭并清空所有 Edge TTS 空闲保活 WebSocket 连接池。 */
+export function closeEdgeConnectionPool(): void {
+  for (const bucket of edgeConnectionPool.values()) {
+    for (const entry of bucket) {
+      clearTimeout(entry.timer)
+      entry.closedOrErrored = true
+      entry.handlers = null
+      try { entry.socket.close() } catch { /* 忽略 */ }
+    }
+  }
+  edgeConnectionPool.clear()
 }
 
 /** 直连工厂（ws 库，Node 全版本可用）。 */
@@ -134,42 +310,69 @@ function escapeXmlAttr(value: string): string {
     .replace(/"/g, '&quot;')
 }
 
-function renderSsmlBody(text: string, pronunciations?: ReadonlyArray<{ word: string; alias: string }>): string {
-  const cleanText = stripIllegalXmlChars(text)
-  if (!Array.isArray(pronunciations) || pronunciations.length === 0) {
-    return escapeXml(cleanText)
+function renderTextWithPronunciations(
+  part: string,
+  map: Map<string, string>,
+  regex: RegExp | null,
+): string {
+  if (regex === null || map.size === 0) {
+    return escapeXml(part)
   }
-
-  const map = new Map<string, string>()
-  for (const rule of pronunciations) {
-    if (!rule || typeof rule.word !== 'string' || typeof rule.alias !== 'string') continue
-    const word = stripIllegalXmlChars(rule.word).trim()
-    const alias = stripIllegalXmlChars(rule.alias).trim()
-    if (word !== '' && alias !== '') {
-      map.set(word, alias)
-    }
-  }
-  if (map.size === 0) {
-    return escapeXml(cleanText)
-  }
-
-  const sortedWords = Array.from(map.keys()).sort((a, b) => b.length - a.length)
-  const regex = new RegExp(sortedWords.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g')
-
+  regex.lastIndex = 0
   let out = ''
   let lastIndex = 0
   let match: RegExpExecArray | null
-  while ((match = regex.exec(cleanText)) !== null) {
+  while ((match = regex.exec(part)) !== null) {
     if (match.index > lastIndex) {
-      out += escapeXml(cleanText.slice(lastIndex, match.index))
+      out += escapeXml(part.slice(lastIndex, match.index))
     }
     const matchedWord = match[0]
-    const alias = map.get(matchedWord)!
-    out += `<sub alias='${escapeXmlAttr(alias)}'>${escapeXml(matchedWord)}</sub>`
+    const alias = map.get(matchedWord)
+    if (alias !== undefined) {
+      out += `<sub alias='${escapeXmlAttr(alias)}'>${escapeXml(matchedWord)}</sub>`
+    } else {
+      out += escapeXml(matchedWord)
+    }
     lastIndex = match.index + matchedWord.length
   }
-  if (lastIndex < cleanText.length) {
-    out += escapeXml(cleanText.slice(lastIndex))
+  if (lastIndex < part.length) {
+    out += escapeXml(part.slice(lastIndex))
+  }
+  return out
+}
+
+function renderSsmlBody(text: string, pronunciations?: ReadonlyArray<{ word: string; alias: string }>): string {
+  const cleanText = stripIllegalXmlChars(text)
+  const map = new Map<string, string>()
+  if (Array.isArray(pronunciations)) {
+    for (const rule of pronunciations) {
+      if (!rule || typeof rule.word !== 'string' || typeof rule.alias !== 'string') continue
+      const word = stripIllegalXmlChars(rule.word).trim()
+      const alias = stripIllegalXmlChars(rule.alias).trim()
+      if (word !== '' && alias !== '') {
+        map.set(word, alias)
+      }
+    }
+  }
+
+  const pieces = splitInlinePauses(cleanText)
+  const hasPause = pieces.some((p) => p.kind === 'pause')
+  if (!hasPause && map.size === 0) {
+    return escapeXml(cleanText)
+  }
+
+  const regex = map.size > 0 ? buildPronunciationPattern(Array.from(map.keys())) : null
+  if (!hasPause) {
+    return renderTextWithPronunciations(cleanText, map, regex)
+  }
+
+  let out = ''
+  for (const piece of pieces) {
+    if (piece.kind === 'pause') {
+      out += `<break time='${piece.durationMs}ms'/>`
+    } else {
+      out += renderTextWithPronunciations(piece.text, map, regex)
+    }
   }
   return out
 }
@@ -231,21 +434,76 @@ function parseMetadataCues(data: string, cues: SubtitleCue[]): void {
   }
 }
 
+export type EdgeBoundaryMode = 'sentence' | 'word' | 'all' | false
+
+function sendSynthesisTurn(
+  socket: WebSocketLike,
+  options: TtsOptions & { boundary?: EdgeBoundaryMode },
+): void {
+  const sentenceBoundaryEnabled = options.boundary === 'sentence' || options.boundary === 'all' ? 'true' : 'false'
+  const wordBoundaryEnabled = options.boundary === 'word' || options.boundary === 'all' ? 'true' : 'false'
+  const config = protocolHeader('speech.config', { 'Content-Type': 'application/json; charset=utf-8' })
+    + JSON.stringify({
+      context: {
+        synthesis: {
+          audio: {
+            metadataoptions: { sentenceBoundaryEnabled, wordBoundaryEnabled },
+            outputFormat: OUTPUT_FORMAT,
+          },
+        },
+      },
+    })
+  const ssml = protocolHeader('ssml', { 'Content-Type': 'application/ssml+xml', 'X-RequestId': randomUUID() }) + buildSsml(options)
+  socket.send(config)
+  socket.send(ssml)
+}
+
+function sleepWithAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted === true) return Promise.reject(signal.reason)
+  if (ms <= 0) return Promise.resolve()
+  return new Promise<void>((resolvePromise, rejectPromise) => {
+    const canListen = typeof signal?.addEventListener === 'function'
+    let onAbort = () => {}
+    const timer = setTimeout(() => {
+      if (canListen) signal!.removeEventListener('abort', onAbort)
+      resolvePromise()
+    }, ms)
+    timer.unref?.()
+    if (canListen) {
+      onAbort = () => {
+        clearTimeout(timer)
+        rejectPromise(signal!.reason)
+      }
+      signal!.addEventListener('abort', onAbort, { once: true })
+    }
+  })
+}
+
 async function runSynthesisAttempt(
-  options: TtsOptions & { boundary?: 'sentence' | 'word' | false },
+  options: TtsOptions & { boundary?: EdgeBoundaryMode },
   factory: WebSocketFactory,
   nowSeconds: number,
   attemptTimeoutMs: number,
   totalTimeoutMs: number,
   abortSignal: AbortSignal | undefined,
   canRetryOn403: boolean,
+  poolingEnabled: boolean,
+  allowPoolReuse: boolean,
+  poolKey: string,
 ): Promise<{ audio: Buffer; cues: SubtitleCue[] }> {
-  const token = generateSecMsGec(nowSeconds)
-  // 对齐 edge-tts 当前协议：Sec-MS-GEC 走 URL 查询参数，MUID 走 header
-  const url = WS_BASE + '?TrustedClientToken=' + TRUSTED_CLIENT_TOKEN + '&ConnectionId=' + randomUUID().replace(/-/g, '') + '&Sec-MS-GEC=' + token + '&Sec-MS-GEC-Version=' + SEC_MS_GEC_VERSION
-  const socket = factory(url, {
-    headers: { ...WSS_HEADERS, Cookie: 'muid=' + randomBytes(16).toString('hex').toUpperCase() + ';' },
-  })
+  let reusedEntry = poolingEnabled && allowPoolReuse ? acquirePooledSocket(poolKey) : null
+  const isReused = reusedEntry !== null
+
+  let entry: PooledSocketEntry
+  if (reusedEntry !== null) {
+    entry = reusedEntry
+  } else {
+    const token = generateSecMsGec(nowSeconds)
+    // 对齐 edge-tts 当前协议：Sec-MS-GEC 走 URL 查询参数，MUID 走 header
+    const url = WS_BASE + '?TrustedClientToken=' + TRUSTED_CLIENT_TOKEN + '&ConnectionId=' + randomUUID().replace(/-/g, '') + '&Sec-MS-GEC=' + token + '&Sec-MS-GEC-Version=' + SEC_MS_GEC_VERSION
+    const headers = { ...WSS_HEADERS, Cookie: 'muid=' + randomBytes(16).toString('hex').toUpperCase() + ';' }
+    entry = createManagedSocketEntry(poolKey, factory, url, headers)
+  }
 
   const chunks: Buffer[] = []
   const cues: SubtitleCue[] = []
@@ -256,39 +514,51 @@ async function runSynthesisAttempt(
     let settled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     let onAbort = () => { /* 占位，随后立即赋值 */ }
-    // 先结算再关 socket：即使 socket.close() 同步触发 close 事件，取消原因也不会被通用错误覆盖。
-    const fail = (error: unknown) => {
+
+    // 先结算再关/回收 socket：即使 socket.close() 同步触发 close 事件，取消原因也不会被通用错误覆盖。
+    const fail = (error: unknown, shouldCloseSocket = true) => {
       if (settled) return
       settled = true
+      entry.handlers = null
       if (timer !== undefined) clearTimeout(timer)
       if (canListen) (abortSignal as AbortSignal).removeEventListener('abort', onAbort)
+      if (shouldCloseSocket) {
+        discardSocketEntry(entry)
+      }
       reject(error)
     }
+
     const finish = () => {
       if (settled) return
       settled = true
+      entry.handlers = null
       if (timer !== undefined) clearTimeout(timer)
       if (canListen) (abortSignal as AbortSignal).removeEventListener('abort', onAbort)
-      try { socket.close() } catch { /* 忽略 */ }
+      if (poolingEnabled) {
+        releaseSocketToPool(entry)
+      } else {
+        discardSocketEntry(entry)
+      }
       resolvePromise()
     }
+
     onAbort = () => {
       const reason = abortSignal?.reason ?? new Error('语音合成已取消。')
-      fail(reason)
-      try { socket.close() } catch { /* 忽略 */ }
+      fail(reason, true)
     }
+
     timer = setTimeout(() => {
-      fail(new Error('语音合成超时（' + totalTimeoutMs + ' 毫秒无完整音频），请重试或检查网络。'))
-      try { socket.close() } catch { /* 忽略 */ }
+      fail(new Error('语音合成超时（' + totalTimeoutMs + ' 毫秒无完整音频），请重试或检查网络。'), true)
     }, attemptTimeoutMs)
+
     if (canListen) (abortSignal as AbortSignal).addEventListener('abort', onAbort, { once: true })
     if (abortSignal?.aborted === true) {
       onAbort()
       return
     }
 
-    if (typeof (socket as { on?: unknown }).on === 'function') {
-      socket.on!('unexpected-response', (_req, res) => {
+    entry.handlers = {
+      onUnexpectedResponse(_req, res) {
         const status = res?.statusCode
         if (status === 403 && canRetryOn403) {
           const rawDate = res.headers?.date ?? res.headers?.Date
@@ -297,83 +567,95 @@ async function runSynthesisAttempt(
           if (Number.isFinite(serverSeconds)) {
             clockSkewSeconds = serverSeconds - Date.now() / 1000
             try { res.resume?.() } catch { /* 忽略 */ }
-            fail(new ClockSkewRetrySignal())
-            try { socket.close() } catch { /* 忽略 */ }
+            fail(new ClockSkewRetrySignal(), true)
             return
           }
         }
         try { res?.resume?.() } catch { /* 忽略 */ }
-        fail(new Error(
-          status === 403
-            ? 'edge-tts 服务端返回 HTTP 403（请求被拒绝或本机时钟偏差过大）。'
-            : 'edge-tts 握手失败（HTTP ' + String(status ?? 'unknown') + '）。',
-        ))
-        try { socket.close() } catch { /* 忽略 */ }
-      })
-    }
+        if (status === 403) {
+          fail(new Error('edge-tts 服务端返回 HTTP 403（请求被拒绝或本机时钟偏差过大）。'), true)
+        } else if (status === undefined || status >= 500 || status === 429) {
+          fail(new TransientWsError('edge-tts 握手失败（HTTP ' + String(status ?? 'unknown') + '）。'), true)
+        } else {
+          fail(new Error('edge-tts 握手失败（HTTP ' + String(status) + '）。'), true)
+        }
+      },
 
-    socket.addEventListener('open', () => {
-      const sentenceBoundaryEnabled = options.boundary === 'sentence' ? 'true' : 'false'
-      const wordBoundaryEnabled = options.boundary === 'word' ? 'true' : 'false'
-      const config = protocolHeader('speech.config', { 'Content-Type': 'application/json; charset=utf-8' })
-        + JSON.stringify({
-          context: {
-            synthesis: {
-              audio: {
-                metadataoptions: { sentenceBoundaryEnabled, wordBoundaryEnabled },
-                outputFormat: OUTPUT_FORMAT,
-              },
-            },
-          },
-        })
-      const ssml = protocolHeader('ssml', { 'Content-Type': 'application/ssml+xml', 'X-RequestId': randomUUID() }) + buildSsml(options)
-      try {
-        socket.send(config)
-        socket.send(ssml)
-      } catch (error) {
-        fail(error instanceof Error ? error : new Error(String(error)))
-      }
-    })
+      onOpen() {
+        try {
+          sendSynthesisTurn(entry.socket, options)
+        } catch (error) {
+          fail(new TransientWsError(error instanceof Error ? error.message : String(error)), true)
+        }
+      },
 
-    socket.addEventListener('message', (event) => {
-      const data = event.data
-      if (typeof data === 'string') {
-        if (data.includes('Path:audio.metadata')) {
-          parseMetadataCues(data, cues)
+      onMessage(event) {
+        const data = event.data
+        if (typeof data === 'string') {
+          if (data.includes('Path:audio.metadata')) {
+            parseMetadataCues(data, cues)
+            return
+          }
+          if (data.includes('Path:turn.end')) {
+            if (chunks.length === 0) {
+              if (isReused) {
+                fail(new StalePooledSocketSignal(), true)
+              } else {
+                fail(new Error('合成结束但没有收到音频数据（服务端可能拒绝了请求）。'), true)
+              }
+            } else if (!done) {
+              done = true
+              finish()
+            }
+          }
           return
         }
-        if (data.includes('Path:turn.end')) {
-          if (chunks.length === 0) {
-            fail(new Error('合成结束但没有收到音频数据（服务端可能拒绝了请求）。'))
-          } else if (!done) {
-            done = true
-            finish()
+        // 二进制帧：2 字节大端头长 + 头文本 + 音频数据；只收 Path:audio 帧避免非音频头污染 MP3 流
+        const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer)
+        if (buffer.length > 2) {
+          const headerLength = buffer.readUInt16BE(0)
+          if (buffer.length > 2 + headerLength) {
+            const header = buffer.subarray(2, 2 + headerLength).toString('utf8')
+            if (/(?:^|\r?\n)Path:audio(?:\r?\n|$)/.test(header)) {
+              chunks.push(buffer.subarray(2 + headerLength))
+            }
           }
         }
-        return
-      }
-      // 二进制帧：2 字节大端头长 + 头文本 + 音频数据；只收 Path:audio 帧避免非音频头污染 MP3 流
-      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer)
-      if (buffer.length > 2) {
-        const headerLength = buffer.readUInt16BE(0)
-        if (buffer.length > 2 + headerLength) {
-          const header = buffer.subarray(2, 2 + headerLength).toString('utf8')
-          if (/(?:^|\r?\n)Path:audio(?:\r?\n|$)/.test(header)) {
-            chunks.push(buffer.subarray(2 + headerLength))
+      },
+
+      onError() {
+        if (isReused && chunks.length === 0) {
+          fail(new StalePooledSocketSignal(), true)
+          return
+        }
+        fail(
+          new TransientWsError('edge-tts WebSocket 连接失败。若网络需要特殊代理（梯子），请在 DSH「设置 → 插件 → 语音」配置 proxyUrl（保存即生效）。'),
+          true,
+        )
+      },
+
+      onClose() {
+        if (!done) {
+          if (isReused && chunks.length === 0) {
+            fail(new StalePooledSocketSignal(), true)
+            return
           }
+          fail(new TransientWsError('edge-tts 连接在收到完整音频前关闭（未收到 turn.end）。'), true)
+        }
+      },
+    }
+
+    if (isReused || entry.opened) {
+      try {
+        sendSynthesisTurn(entry.socket, options)
+      } catch (error) {
+        if (isReused) {
+          fail(new StalePooledSocketSignal(), true)
+        } else {
+          fail(new TransientWsError(error instanceof Error ? error.message : String(error)), true)
         }
       }
-    })
-
-    socket.addEventListener('error', () => {
-      fail(new Error('edge-tts WebSocket 连接失败。若网络需要特殊代理（梯子），请在 DSH「设置 → 插件 → 语音」配置 proxyUrl（保存即生效）。'))
-    })
-
-    socket.addEventListener('close', () => {
-      if (!done) {
-        fail(new Error('edge-tts 连接在收到完整音频前关闭（未收到 turn.end）。'))
-      }
-    })
+    }
   })
 
   const audio = Buffer.concat(chunks)
@@ -383,34 +665,78 @@ async function runSynthesisAttempt(
 
 /**
  * 合成语音并可选返回句/词级边界字幕时间轴。
- * 收到 HTTP 403 且响应带有效 Date 头时自动校准时钟偏差并单次重试。
+ * 支持 Keep-Alive WebSocket 连接池复用、HTTP 403 时钟自动校准与瞬态断连自动重试。
  * @throws 文本为空/超长 / 连接失败 / 超时 / 无音频数据时抛中文错误。
  */
 export async function synthesizeSpeechWithMetadata(
-  options: TtsOptions & { boundary?: 'sentence' | 'word' | false },
+  options: TtsOptions & { boundary?: EdgeBoundaryMode },
   deps: TtsDeps = {},
   timeoutMs = 30000,
   signal?: AbortSignal,
 ): Promise<{ audio: Buffer; cues: SubtitleCue[] }> {
   const abortSignal = signal ?? deps.signal
-  if (abortSignal?.aborted === true) throw abortSignal.reason
+  throwIfAborted(abortSignal)
   if (options.text.trim() === '') throw new Error('要合成的文本为空。')
   if (options.text.length > 5000) throw new Error('文本过长（超过 5000 字符），请分段合成。')
 
   const factory = deps.webSocketFactory ?? (deps.proxyUrl !== undefined && deps.proxyUrl !== '' ? proxyWebSocket(deps.proxyUrl) : directWebSocket)
+  const poolingEnabled = deps.usePool === true || deps.webSocketFactory === undefined
+  const poolKey = deps.proxyUrl && deps.proxyUrl !== '' ? deps.proxyUrl : 'direct'
+  const rawRetries = deps.maxRetries ?? (deps.webSocketFactory === undefined ? 1 : 0)
+  let retriesLeft = Number.isFinite(rawRetries) ? Math.max(0, Math.floor(rawRetries)) : 0
+  let canRetryOn403 = true
+  let allowPoolReuse = poolingEnabled
+
   const startedAt = Date.now()
   const now = () => (deps.nowSeconds ? deps.nowSeconds() : Date.now() / 1000 + clockSkewSeconds)
 
-  try {
-    return await runSynthesisAttempt(options, factory, now(), timeoutMs, timeoutMs, abortSignal, true)
-  } catch (error) {
-    if (!(error instanceof ClockSkewRetrySignal)) throw error
-    if ((abortSignal as AbortSignal | undefined)?.aborted === true) throw abortSignal!.reason
+  while (true) {
+    throwIfAborted(abortSignal)
     const remainingMs = timeoutMs - (Date.now() - startedAt)
     if (remainingMs <= 0) {
       throw new Error('语音合成超时（' + timeoutMs + ' 毫秒无完整音频），请重试或检查网络。')
     }
-    return await runSynthesisAttempt(options, factory, now(), remainingMs, timeoutMs, abortSignal, false)
+
+    try {
+      return await runSynthesisAttempt(
+        options,
+        factory,
+        now(),
+        remainingMs,
+        timeoutMs,
+        abortSignal,
+        canRetryOn403,
+        poolingEnabled,
+        allowPoolReuse,
+        poolKey,
+      )
+    } catch (error) {
+      throwIfAborted(abortSignal)
+
+      if (error instanceof StalePooledSocketSignal) {
+        allowPoolReuse = false
+        continue
+      }
+
+      if (error instanceof ClockSkewRetrySignal) {
+        canRetryOn403 = false
+        allowPoolReuse = false
+        continue
+      }
+
+      if (error instanceof TransientWsError && retriesLeft > 0) {
+        retriesLeft -= 1
+        allowPoolReuse = false
+        const leftBeforeWait = timeoutMs - (Date.now() - startedAt)
+        if (leftBeforeWait <= 0) {
+          throw new Error('语音合成超时（' + timeoutMs + ' 毫秒无完整音频），请重试或检查网络。')
+        }
+        await sleepWithAbort(Math.min(150, leftBeforeWait), abortSignal)
+        continue
+      }
+
+      throw error
+    }
   }
 }
 

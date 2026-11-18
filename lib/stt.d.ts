@@ -39,6 +39,10 @@ export interface OversizeAudioPreparation {
     chunks: PreparedAudioChunk[];
     cleanup: () => void;
 }
+/**
+ * 判断文件路径是否为常见视频封装容器（故意不含 `.webm`，确保浏览器麦克风录音无需本地 ffmpeg 即可直接转写）。
+ */
+export declare function isVideoContainerFile(filePath: string): boolean;
 /** 字节数超过 25MB 时抛错：调用方可在读文件前先按 statSync 大小快速拒绝，避免白读整文件。 */
 export declare function assertAudioSize(bytes: number): void;
 /** 传给 transcribe 的 fetch：可以像代理那样一并带上自己的 FormData/Blob 构造器。 */

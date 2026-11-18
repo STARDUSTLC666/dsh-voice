@@ -1,12 +1,13 @@
 /**
- * 本地受鉴权 Voice Studio 后端路由：复用宿主 connection/webServer 载体，提供音色列表、即时试听、麦克风转写与安全配置更新。
+ * 本地受鉴权 Voice Studio 后端路由：复用宿主 connection/webServer 载体，提供音色列表、即时试听、
+ * 8 秒录音直出克隆角色、多角色对话合成、工作区成品库、麦克风转写与安全配置更新。
  * 绝不向前端返回 asrApiKey / ttsApiKey / proxyUrl 等敏感凭据原文。
  *
  * @module dsh-voice/web
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { type AsrEngine, type CustomVoiceAlias, type ResolvedVoiceConfig, type TtsEngine } from './config.js';
-import { fetchEdgeVoices, synthesizeSpeech } from './edge-tts.js';
+import { fetchEdgeVoices, synthesizeSpeech, synthesizeSpeechWithMetadata } from './edge-tts.js';
 import { synthesizeOpenAiSpeech } from './openai-tts.js';
 import { transcribe } from './stt.js';
 export declare const VOICE_STUDIO_SETTINGS_ROUTE = "/_dsh/dsh-voice/studio";
@@ -23,7 +24,9 @@ export interface StudioPronunciationRule {
 export interface VoiceStudioBackendOptions {
     updateSettings?: (patch: Record<string, unknown>) => Promise<void>;
     writable?: () => boolean;
+    workspaceDir?: string | (() => string);
     tts?: typeof synthesizeSpeech;
+    ttsWithMeta?: typeof synthesizeSpeechWithMetadata;
     openaiTts?: typeof synthesizeOpenAiSpeech;
     fetchVoices?: typeof fetchEdgeVoices;
     stt?: typeof transcribe;
