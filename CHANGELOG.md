@@ -1,5 +1,11 @@
 # 更新记录
 
+
+## 0.10.2 (2026-11-19)
+
+- 修复语音工作台弹窗和备用输入控件反复重挂载造成的编辑失焦，保留宿主迟到、替换与卸载的控件发现。
+- Keep voice-workbench modal/input identity stable while observing host availability changes.
+
 ## 0.10.1 (2026-11-18)
 
 - 升级共享更新组件至 `@stardustlc/dsh-updates@0.2.5`：独立安装插件详情页底栏去重（保留组合包组件委派与对话页热更新卡片），补齐 `bundle-in-use` 组合包占用提示说明，并在检查结果过期或远端版本变更时自动刷新元数据，彻底消除 `check-first` 卡顿。
