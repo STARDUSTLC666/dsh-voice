@@ -277,6 +277,8 @@ export function renderDshIcon(React, { name = 'file', size = 16, paths = DSH_ICO
   );
 }
 
+const primitivesByReact = new WeakMap();
+
 /**
  * Lazily resolves `@deepseek-ai/dsh-client-ui-primitives` on render and supplies
  * semantic, accessible HTML fallbacks when running in standalone `jsdom` or `node:vm`
@@ -295,6 +297,15 @@ export function resolveHostPrimitives(React, requireFn) {
       host = null;
     }
   }
+
+  // Keep component types stable while still discovering host changes on render.
+  let primitivesByHost = primitivesByReact.get(React);
+  if (!primitivesByHost) {
+    primitivesByHost = new Map();
+    primitivesByReact.set(React, primitivesByHost);
+  }
+  const cached = primitivesByHost.get(host);
+  if (cached) return cached;
 
   function FallbackButton({ variant = 'ghost', size = 'md', icon, className, children, type = 'button', ...rest }) {
     const cls = ['dsh-btn', `dsh-btn-${variant}`, `dsh-btn-${size}`, className].filter(Boolean).join(' ');
@@ -535,7 +546,7 @@ export function resolveHostPrimitives(React, requireFn) {
       }
     : FallbackModal;
 
-  return {
+  const resolved = {
     ...(host || {}),
     isFallback: !host,
     Button: host?.Button || FallbackButton,
@@ -546,6 +557,8 @@ export function resolveHostPrimitives(React, requireFn) {
     Menu: WrappedMenu,
     Modal: WrappedModal,
   };
+  primitivesByHost.set(host, resolved);
+  return resolved;
 }
 
 /**
