@@ -484,9 +484,11 @@ export function resolveHostPrimitives(React, requireFn) {
         'data-dsh-style': style,
         'data-window-drag-exclude': '',
         'data-dsh-portal-synced': 'true',
-        onKeyDownCapture: event => {
-          onKeyDownCapture?.(event);
+        onKeyDownCapture,
+        // Let nested menus/editors consume Escape before the enclosing dialog.
+        onKeyDown: event => {
           if (!event?.defaultPrevented && event?.key === 'Escape') {
+            event.stopPropagation?.();
             onClose?.();
           }
         },
