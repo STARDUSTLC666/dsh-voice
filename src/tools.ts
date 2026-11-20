@@ -127,16 +127,27 @@ function raceAbort<T>(value: T | PromiseLike<T>, signal: AbortSignal | undefined
 async function mapLimit<T, R>(items: T[], limit: number, signal: AbortSignal | undefined, worker: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length)
   let next = 0
+  let failed = false
+  let failure: unknown
   const run = async (): Promise<void> => {
-    for (;;) {
-      throwIfAborted(signal)
-      const index = next
-      next += 1
-      if (index >= items.length) return
-      results[index] = await worker(items[index])
+    try {
+      for (;;) {
+        if (failed) return
+        throwIfAborted(signal)
+        const index = next
+        next += 1
+        if (index >= items.length) return
+        results[index] = await worker(items[index])
+      }
+    } catch (error) {
+      if (!failed) { failed = true; failure = error }
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => run()))
+  // Each active worker still owns its input (including temporary audio Blobs).
+  // Drain it before callers clean up, and never schedule another upload on error.
+  throwIfAborted(signal)
+  if (failed) throw failure
   return results
 }
 
