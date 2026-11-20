@@ -43,7 +43,7 @@ function mimeOfAudio(filename: string): string {
 
 /**
  * 上传参考音频到 SiliconFlow `/uploads/audio/voice` 并返回可复用的 `speech:...` URI；
- * 相同 `baseUrl + model + text + audio SHA-256` 命中内存缓存直接返回，避免分段重复上传。
+ * 同一账号的相同 `baseUrl + model + text + audio SHA-256` 命中内存缓存直接返回。
  */
 export async function uploadSiliconFlowVoice(
   baseUrl: string,
@@ -71,7 +71,9 @@ export async function uploadSiliconFlowVoice(
 
   const audioHash = createHash('sha256').update(sample.audio).digest('hex')
   const cacheKey = createHash('sha256')
-    .update(trimmedBaseUrl + '|' + sample.model + '|' + sample.text + '|' + audioHash)
+    // Uploaded voice URIs belong to the authenticated account. Hash the scope
+    // together with the sample; never retain the raw API key as a cache key.
+    .update(JSON.stringify([trimmedBaseUrl, key, sample.model, sample.text, audioHash]))
     .digest('hex')
 
   const cached = uploadedVoiceUriCache.get(cacheKey)

@@ -13,7 +13,7 @@ export type OpenAiTtsFetch = typeof fetch & {
 export declare function resetUploadedVoiceCacheForTest(): void;
 /**
  * 上传参考音频到 SiliconFlow `/uploads/audio/voice` 并返回可复用的 `speech:...` URI；
- * 相同 `baseUrl + model + text + audio SHA-256` 命中内存缓存直接返回，避免分段重复上传。
+ * 同一账号的相同 `baseUrl + model + text + audio SHA-256` 命中内存缓存直接返回。
  */
 export declare function uploadSiliconFlowVoice(baseUrl: string, apiKey: string, sample: {
     audio: Buffer;

@@ -340,6 +340,10 @@ test('Pro 5: voice_tts bgmFile 校验工作区边界并调用 deps.mixBgm 自动
   assert.equal(mixCalls[0].opts.bgmVolume, 0.25)
   assert.equal(mixCalls[0].opts.ducking, true)
   assert.ok(existsSync(res.output))
+  for (const [volume, expected] of [[-1, 0.02], [2, 1], [Number.NaN, 0.18]]) {
+    await tts.execute({ text: '音量范围保持有效', bgmFile: 'bgm.mp3', bgmVolume: volume, output: join(root, 'clamped-' + expected + '.mp3') }, exec)
+    assert.equal(mixCalls.at(-1).opts.bgmVolume, expected)
+  }
 })
 
 test('Pro 5: voice_stt diarize: true 通过 deps.splitStereo 分离双声道并输出 [说话人 A] 字幕与分段文本', async (t) => {

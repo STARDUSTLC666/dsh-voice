@@ -1,5 +1,11 @@
 # 更新记录
 
+## 0.10.6 (2026-11-20)
+
+- 修复 SiliconFlow 参考音频缓存跨 API 密钥复用私有音色 URI 的问题；已完成上传缓存和并发上传去重均按账号隔离，同账号分段合成仍复用上传结果。
+- Scope cached and in-flight SiliconFlow reference-voice uploads to the authenticated account, preserving same-account reuse while preventing private voice URIs from crossing credential changes.
+- 修复工具参数使用宿主不支持的 JSON Schema 范围关键词导致工具注册失败的问题；数值限制继续由运行时校验，补充官方宿主注册和双语言 PTC SDK 验证。
+- 同步共享更新组件 0.2.9，修复取消窗口和失败响应清理，并确保运行中旧协调器在空闲后接管修复。
 
 ## 0.10.5 (2026-11-20)
 
