@@ -57,6 +57,24 @@ export declare function createVoiceStudioBackend(readCfg: () => ResolvedVoiceCon
     fetch(request: Request): Promise<Response>;
     handle(req: IncomingMessage, res: ServerResponse, transport?: symbol): Promise<void>;
 };
+export interface HostSettingsBinding {
+    isWritable(): boolean;
+    update(patch: Record<string, unknown>): Promise<void>;
+}
+/**
+ * 可选注入宿主 `settings` 服务并按 cordis 条目 ID（默认 `'voice'`）绑定配置持久化写入与只读检查。
+ * 不改变插件顶层 `export const inject = ['tools']` 声明；宿主无 settings 服务时优雅回退只读。
+ */
+export declare function bindHostSettings(ctx: {
+    inject?: Function;
+    fiber?: {
+        entry?: {
+            options?: {
+                id?: string;
+            };
+        };
+    };
+}): HostSettingsBinding;
 export declare function installVoiceStudioWeb(ctx: {
     inject?: Function;
     fiber?: {

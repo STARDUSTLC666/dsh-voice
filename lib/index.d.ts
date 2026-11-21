@@ -25,7 +25,7 @@ export interface VoicePluginContext {
     on?(event: string, listener: () => void): () => void;
 }
 /**
- * 插件入口：解析配置、注册五个语音工具、按需注入运行时工作流技能并挂载 Voice Studio Web 路由。
+ * 插件入口：解析配置、注册六个语音工具、按需注入运行时工作流技能与 settings 偏好绑定，并挂载 Voice Studio Web 路由。
  */
 export declare function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): void;
 export * from './config.js';
@@ -39,3 +39,4 @@ export * from './tools.js';
 export * from './tts-text.js';
 export * from './voices.js';
 export * from './web.js';
+export * from './wish.js';

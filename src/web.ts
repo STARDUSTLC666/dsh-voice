@@ -47,6 +47,7 @@ import {
   parseSubtitleFile,
 } from './tts-text.js'
 import { filterVoices, isValidVoiceId, resolvePersona, VOICE_PERSONAS, VOICES } from './voices.js'
+import { resolveVoiceWish } from './wish.js'
 
 export const VOICE_STUDIO_SETTINGS_ROUTE = '/_dsh/dsh-voice/studio'
 export const VOICE_STUDIO_API_ROUTE = '/api/dsh-voice/studio'
@@ -489,16 +490,45 @@ export function createVoiceStudioBackend(
     const activeAlias = customAlias ?? defaultAlias
 
     let voiceConsumedAsPersona = false
+    let personaWishVoice: string | undefined
+    let voiceWishVoice: string | undefined
     let personaSpec = !personaConsumedAsAlias && rawPersona !== undefined ? resolvePersona(rawPersona) : undefined
+    if (personaSpec === undefined && !personaConsumedAsAlias && rawPersona !== undefined) {
+      const wish = resolveVoiceWish(rawPersona, cfg.customVoices)
+      if (wish?.kind === 'persona' && wish.persona !== undefined) {
+        personaSpec = wish.persona
+      } else if (wish?.kind === 'voice' && wish.voice !== undefined) {
+        personaWishVoice = wish.voice
+      }
+    }
     if (personaSpec === undefined && activeAlias?.persona !== undefined) {
       personaSpec = resolvePersona(activeAlias.persona)
+      if (personaSpec === undefined) {
+        const aliasWish = resolveVoiceWish(activeAlias.persona, cfg.customVoices)
+        if (aliasWish?.kind === 'persona' && aliasWish.persona !== undefined) {
+          personaSpec = aliasWish.persona
+        } else if (aliasWish?.kind === 'voice' && aliasWish.voice !== undefined && personaWishVoice === undefined) {
+          personaWishVoice = aliasWish.voice
+        }
+      }
     }
     if (personaSpec === undefined && !voiceConsumedAsAlias && rawVoice !== undefined && !isValidVoiceId(rawVoice)) {
       personaSpec = resolvePersona(rawVoice)
-      if (personaSpec !== undefined) voiceConsumedAsPersona = true
+      if (personaSpec !== undefined) {
+        voiceConsumedAsPersona = true
+      } else {
+        const wish = resolveVoiceWish(rawVoice, cfg.customVoices)
+        if (wish?.kind === 'persona' && wish.persona !== undefined) {
+          personaSpec = wish.persona
+          voiceConsumedAsPersona = true
+        } else if (wish?.kind === 'voice' && wish.voice !== undefined) {
+          voiceWishVoice = wish.voice
+        }
+      }
     }
 
     let defaultPersona: ReturnType<typeof resolvePersona>
+    let defaultWishVoice: string | undefined
     if (
       rawVoice === undefined &&
       rawPersona === undefined &&
@@ -506,6 +536,14 @@ export function createVoiceStudioBackend(
       !isValidVoiceId(cfg.ttsVoice)
     ) {
       defaultPersona = resolvePersona(cfg.ttsVoice)
+      if (defaultPersona === undefined) {
+        const cfgWish = resolveVoiceWish(cfg.ttsVoice, cfg.customVoices)
+        if (cfgWish?.kind === 'persona' && cfgWish.persona !== undefined) {
+          defaultPersona = cfgWish.persona
+        } else if (cfgWish?.kind === 'voice' && cfgWish.voice !== undefined) {
+          defaultWishVoice = cfgWish.voice
+        }
+      }
     }
     const activePersona = personaSpec ?? defaultPersona
 
@@ -531,11 +569,11 @@ export function createVoiceStudioBackend(
       ]
     }
 
-    const explicitRawVoice = !voiceConsumedAsAlias && !voiceConsumedAsPersona ? rawVoice : undefined
+    const explicitRawVoice = !voiceConsumedAsAlias && !voiceConsumedAsPersona ? (voiceWishVoice ?? rawVoice) : undefined
     const resolvedVoice =
       !useEdge && references !== undefined && explicitRawVoice === undefined
         ? (activeAlias?.voice ?? '')
-        : (explicitRawVoice ?? activeAlias?.voice ?? activePersona?.voice ?? cfg.ttsVoice)
+        : (explicitRawVoice ?? activeAlias?.voice ?? personaWishVoice ?? activePersona?.voice ?? defaultWishVoice ?? cfg.ttsVoice)
     const displayVoice = resolvedVoice || activeAlias?.name || cfg.ttsVoice
     const resolvedRate = input.rate ?? activeAlias?.rate ?? activePersona?.rate ?? cfg.ttsRate
     const resolvedPitch = input.pitch ?? activeAlias?.pitch ?? activePersona?.pitch ?? cfg.ttsPitch
@@ -1339,29 +1377,22 @@ export function createVoiceStudioBackend(
   }
 }
 
-export function installVoiceStudioWeb(
+export interface HostSettingsBinding {
+  isWritable(): boolean
+  update(patch: Record<string, unknown>): Promise<void>
+}
+
+/**
+ * 可选注入宿主 `settings` 服务并按 cordis 条目 ID（默认 `'voice'`）绑定配置持久化写入与只读检查。
+ * 不改变插件顶层 `export const inject = ['tools']` 声明；宿主无 settings 服务时优雅回退只读。
+ */
+export function bindHostSettings(
   ctx: { inject?: Function; fiber?: { entry?: { options?: { id?: string } } } },
-  readCfg: () => ResolvedVoiceConfig,
-  deps: VoiceStudioBackendOptions = {},
-): ReturnType<typeof createVoiceStudioBackend> {
-  let updateSettings = deps.updateSettings
+): HostSettingsBinding {
+  let updateSettings: ((patch: Record<string, unknown>) => Promise<void>) | undefined
   let isHostWritable: (() => boolean) | undefined
-  const backend = createVoiceStudioBackend(readCfg, {
-    ...deps,
-    writable:
-      deps.writable ??
-      (() => typeof updateSettings === 'function' && (isHostWritable ? isHostWritable() : true)),
-    updateSettings: (patch) => {
-      if (typeof updateSettings !== 'function' || (isHostWritable && !isHostWritable())) {
-        return Promise.reject(new VoiceStudioError('当前配置是只读的，无法保存设置。', 403, 'readonly'))
-      }
-      return updateSettings(patch)
-    },
-  })
 
-  if (typeof ctx.inject !== 'function') return backend
-
-  if (!deps.updateSettings) {
+  if (typeof ctx.inject === 'function') {
     try {
       ctx.inject(['settings'], (host: any) => {
         const rawId = ctx.fiber?.entry?.options?.id
@@ -1386,6 +1417,44 @@ export function installVoiceStudioWeb(
       /* 宿主未提供 settings 服务时回退只读状态。 */
     }
   }
+
+  return {
+    isWritable: () => typeof updateSettings === 'function' && (isHostWritable ? isHostWritable() : true),
+    update: (patch: Record<string, unknown>) => {
+      if (typeof updateSettings !== 'function' || (isHostWritable && !isHostWritable())) {
+        return Promise.reject(new VoiceStudioError('当前配置是只读的，无法保存设置。', 403, 'readonly'))
+      }
+      return updateSettings(patch)
+    },
+  }
+}
+
+export function installVoiceStudioWeb(
+  ctx: { inject?: Function; fiber?: { entry?: { options?: { id?: string } } } },
+  readCfg: () => ResolvedVoiceConfig,
+  deps: VoiceStudioBackendOptions = {},
+): ReturnType<typeof createVoiceStudioBackend> {
+  const hostSettings = !deps.updateSettings ? bindHostSettings(ctx) : undefined
+  const backend = createVoiceStudioBackend(readCfg, {
+    ...deps,
+    writable:
+      deps.writable ??
+      (deps.updateSettings ? () => true : () => hostSettings?.isWritable() === true),
+    updateSettings: (patch) => {
+      if (deps.updateSettings) {
+        if (deps.writable && deps.writable() === false) {
+          return Promise.reject(new VoiceStudioError('当前配置是只读的，无法保存设置。', 403, 'readonly'))
+        }
+        return deps.updateSettings(patch)
+      }
+      if (!hostSettings || !hostSettings.isWritable()) {
+        return Promise.reject(new VoiceStudioError('当前配置是只读的，无法保存设置。', 403, 'readonly'))
+      }
+      return hostSettings.update(patch)
+    },
+  })
+
+  if (typeof ctx.inject !== 'function') return backend
 
   ctx.inject(['connection'], (host: any) => {
     const mount = () =>

@@ -13,9 +13,9 @@ const exec = { agent: { session: { header: { cwd: dir } } } }
 
 const cfg = resolveConfig({ asrApiKey: 'test-key', timeoutMs: 5000 })
 
-test('构建 5 个工具且名字正确', () => {
+test('构建 6 个工具且名字正确', () => {
   const names = buildVoiceTools(cfg).map((t) => t.name).sort()
-  assert.deepEqual(names, ['voice_health', 'voice_list', 'voice_preview', 'voice_stt', 'voice_tts'])
+  assert.deepEqual(names, ['voice_health', 'voice_list', 'voice_prefs', 'voice_preview', 'voice_stt', 'voice_tts'])
 })
 
 test('每个工具 schema 是 object JSON Schema，输出含 render', () => {

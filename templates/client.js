@@ -887,7 +887,7 @@ window.__ModuleLoader__.load({
                 icon: 'play',
                 spinning: busy === 'preview:studio',
                 disabled: !!busy || !studioText.trim(),
-              }, busy === 'preview:studio' ? t('auditioning') : vText('▶ 立即试听并跟读测算时长', '▶ Audition & Measure Duration')),
+              }, busy === 'preview:studio' ? t('auditioning') : vText('立即试听并跟读测算时长', 'Audition & Measure Duration')),
               h(W.CopyPrompt, {
                 prompt: vText(
                   `请用音色/人设「${selectedTarget}」（语速 ${studioRate}，音调 ${studioPitch}${studioInstructions.trim() ? `，情绪指令：${studioInstructions.trim()}` : ''}）合成以下文稿：${studioText}`,
@@ -963,7 +963,7 @@ window.__ModuleLoader__.load({
                     },
                   ]);
                 },
-              }, vText('+ 添加台词', '+ Add Line')),
+              }, vText('添加台词', 'Add Line')),
               h(W.Checkbox, {
                 label: vText('保存到工作区 voice_outputs/（含 .mp3 + .srt）', 'Save MP3 + .srt to workspace voice_outputs/'),
                 checked: saveDialogueToWs,
@@ -1005,7 +1005,7 @@ window.__ModuleLoader__.load({
                 onClick: () => { void triggerDialogueSynthesis(); },
               }, busy === 'synthesizeDialogue'
                 ? vText('正在合成多角色对话…', 'Synthesizing dialogue…')
-                : vText('▶ 直接合成多角色对话并跟读播放', '▶ Synthesize Multi-Speaker Dialogue & Play')),
+                : vText('直接合成多角色对话并跟读播放', 'Synthesize Multi-Speaker Dialogue & Play')),
             ),
 
             h('div', { className: 'voice-subform' },
@@ -1500,7 +1500,7 @@ window.__ModuleLoader__.load({
                           spinning: busy === 'media:' + item.path,
                           disabled: !!busy,
                           onClick: () => { void playWorkspaceItem(item); },
-                        }, vText('▶ 字幕跟读播放', '▶ Follow-Along Play')),
+                        }, vText('字幕跟读播放', 'Follow-Along Play')),
                       ),
                     )),
                   ),

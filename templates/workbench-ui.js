@@ -1442,6 +1442,20 @@ function createWorkbenchUI(React, require) {
   white-space: nowrap;
 }
 
+.dsh-wb-switch-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dsh-wb-switch-text {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--w-ink);
+  white-space: nowrap;
+}
+
 .dsh-wb-choice {
   display: block;
   min-width: 0;
@@ -1489,6 +1503,13 @@ function createWorkbenchUI(React, require) {
 
 .dsh-wb-search:has(.dsh-wb-search-clear) .dsh-wb-input {
   padding-inline-end: 28px;
+}
+
+.dsh-wb-search input[type="search"]::-webkit-search-cancel-button,
+.dsh-wb-search input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
 }
 
 /* Status Banner */

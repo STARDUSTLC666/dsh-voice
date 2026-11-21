@@ -1,10 +1,10 @@
 import { registerUpdates } from '@stardustlc/dsh-updates'
 /**
- * dsh-voice —— 语音双件套工具插件（node 半身，配置走 cordis.patch.yml）。
+ * dsh-voice —— 语音工作台与许愿式语音工具插件（node 半身，配置走 cordis.patch.yml）。
  *
- * 插件导出 apply(ctx, config)：注册五个面向模型的工具（voice_tts / voice_stt /
- * voice_list / voice_preview / voice_health）。TTS 走 edge-tts 协议（原生 WebSocket，
- * 零 API 成本）；STT 走 OpenAI 兼容 ASR 接口（Groq/OpenAI/自定义端点）。
+ * 插件导出 apply(ctx, config)：注册六个面向模型的工具（voice_tts / voice_stt /
+ * voice_list / voice_preview / voice_health / voice_prefs）。TTS 默认走 edge-tts 协议
+ * （原生 WebSocket，零 API 成本）；STT 走 OpenAI 兼容 ASR 接口（Groq/OpenAI/SiliconFlow/自定义端点）。
  *
  * @module dsh-voice
  */
@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { resolveConfig, type VoiceConfig } from './config.js'
 import { Config as VoiceConfigSchema, liveConfig } from './host-config.js'
 import { buildVoiceTools, type VoiceToolDefinition } from './tools.js'
-import { installVoiceStudioWeb } from './web.js'
+import { bindHostSettings, installVoiceStudioWeb } from './web.js'
 
 /** cordis 服务注入：apply 里要用 ctx.tools，必须显式声明。 */
 export const Config = VoiceConfigSchema
@@ -104,7 +104,7 @@ export interface VoicePluginContext {
 }
 
 /**
- * 插件入口：解析配置、注册五个语音工具、按需注入运行时工作流技能并挂载 Voice Studio Web 路由。
+ * 插件入口：解析配置、注册六个语音工具、按需注入运行时工作流技能与 settings 偏好绑定，并挂载 Voice Studio Web 路由。
  */
 export function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): void {
   registerUpdates(ctx, { name: "dsh-voice" })
@@ -126,12 +126,19 @@ export function apply(ctx: VoicePluginContext, config?: VoiceConfig | null): voi
   // 启动期跑一次校验，触发必要的告警但绝不阻断注册。
   readCfg()
 
+  const hostSettings = bindHostSettings(ctx as any)
   const disposers: Array<() => void> = []
-  for (const definition of buildVoiceTools(readCfg)) {
+  for (const definition of buildVoiceTools(readCfg, {
+    isSettingsWritable: () => hostSettings.isWritable(),
+    updateSettings: (patch) => hostSettings.update(patch),
+  })) {
     disposers.push(ctx.tools.register(definition))
   }
   installVoiceWorkflowSkill(ctx, warn, disposers)
-  installVoiceStudioWeb(ctx as any, readCfg)
+  installVoiceStudioWeb(ctx as any, readCfg, {
+    writable: () => hostSettings.isWritable(),
+    updateSettings: (patch) => hostSettings.update(patch),
+  })
   const teardown = () => {
     for (const dispose of disposers) dispose()
   }
@@ -153,3 +160,4 @@ export * from './tools.js'
 export * from './tts-text.js'
 export * from './voices.js'
 export * from './web.js'
+export * from './wish.js'

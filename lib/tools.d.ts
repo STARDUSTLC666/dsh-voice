@@ -27,7 +27,7 @@ export interface VoiceToolDefinition {
 }
 /** 默认试听文本（中英混合，便于感知发音差异）。 */
 export declare const DEFAULT_PREVIEW_TEXT = "\u4F60\u597D\uFF0C\u8FD9\u662F\u97F3\u8272\u8BD5\u542C\u3002Hello, this is a voice preview.";
-/** 可注入依赖（测试用假实现）。 */
+/** 可注入依赖（测试用假实现与宿主 settings 写入绑定）。 */
 export interface VoiceToolDeps {
     tts?: typeof synthesizeSpeech;
     ttsWithMeta?: typeof synthesizeSpeechWithMetadata;
@@ -39,8 +39,11 @@ export interface VoiceToolDeps {
     mixBgm?: typeof mixAudioWithBgm;
     splitStereo?: typeof splitStereoChannelsForDiarization;
     fitWindow?: typeof fitAudioToWindow;
+    hasFfmpeg?: () => boolean;
+    updateSettings?: (patch: Record<string, unknown>) => Promise<void>;
+    isSettingsWritable?: () => boolean;
 }
 /**
- * 构建五个语音工具定义（支持静态配置对象或活引用配置 getter）。
+ * 构建六个语音工具定义（支持静态配置对象或活引用配置 getter）。
  */
 export declare function buildVoiceTools(config: ResolvedVoiceConfig | (() => ResolvedVoiceConfig), deps?: VoiceToolDeps): VoiceToolDefinition[];

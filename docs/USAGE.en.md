@@ -4,13 +4,13 @@
 
 ## Get Started in 3 Steps
 
-### Step 1: Know What Works Out of the Box, 5-Theme Creative-Loop Workbench & Optional Setup
+### Step 1: Know What Works Out of the Box (Wish-Driven Chat-First) & Optional Setup
 
-- **Native 5-theme Voice Studio "True Creative Loop" workbench**: Open Voice Studio in the DSH sidebar with 5 synced themes (**Native Airy / Warm Cream / Claude Warmth / Bright 8-Bit / Airy Mint**) and an interactive Coachmark tour. Audition 300+ online voices and 10 personas (`0.8x–1.5x` speed, 1-click MP3 download, and an **interactive click-to-seek synchronized subtitle player**), compose and synthesize multi-speaker dialogues visually right in the **Studio** tab, **record 8 seconds on your browser mic to create a cloned role in 1 click** (saves to `voice_clones/` + auto-ASR `referenceText` + registers in `customVoices`), browse generated files in the **Workspace Library** tab, and manage `pronunciations` rules without editing YAML.
-- **Text-to-speech (`voice_tts`, `voice_list`, `voice_preview`) works with zero config**: Uses Edge neural voices by default (with a keep-alive WebSocket connection pool and transient retry) with zero API keys — discover 300+ live online Edge voices or 45+ all-age/dialect built-ins, apply 10 `persona` presets, export short-video clause/word captions & `.ass` karaoke subtitles (`subtitleGranularity`, `maxCharsPerCue`), use inline `[pause:500ms]` speech tags, apply word-boundary-safe `pronunciations`, embed native MP3 ID3v2 `CHAP`/`CTOC` chapters (`chaptersOutput`), zero-drift reverse-dub `.srt`/`.vtt` timelines (`subtitleInput`), inspect VBR-accurate `durationMs`/`durationSec`, and generate an interactive browser audition page. Switch `ttsEngine` to `siliconflow`, `openai`, or `custom` in Settings when you need emotion `instructions`, Kokoro blending, or zero-shot `referenceAudio` cloning.
+- **Wish-Driven chat-first TTS & preferences (`voice_tts`, `voice_preview`, `voice_list`, `voice_prefs`) work with zero keys**: Uses Edge neural voices by default (with a keep-alive WebSocket connection pool and transient retry) — fulfill high-level wishes in 1–2 tool calls using **6 high-level `scene` presets (`podcast` / `short-video` / `audiobook` / `briefing` / `story` / `dubbing` plus Chinese aliases)**, **fuzzy natural-language style & dialect matching** (`"深夜"`, `"纪录片"`, `"播客女"`, `"粤语男声"`, `"东北话"`, etc.), **automatic `targetDurationSec` duration fitting (`3–3600s`)**, **built-in word-boundary-safe `autoPronunciations` tech lexicon** (enabled by default), **self-contained HTML5 interactive player (`createPlayer` / `playerOutput` → `<stem>.player.html`)**, **curated scene auditions (`voice_preview({ scene })`)**, and **conversational preference memory (`voice_prefs`)**. Includes **51 live-verified built-in Edge voices**, 300+ live online Edge voices, and 10 live-verified `persona` presets. Switch `ttsEngine` to `siliconflow`, `openai`, or `custom` in Settings when you need emotion `instructions`, Kokoro blending, or zero-shot `referenceAudio` cloning.
+- **Optional 5-theme Voice Studio sidebar workbench**: Open Voice Studio in the DSH sidebar on demand when you want **8-second browser mic 1-click clone creation** (`voice_clones/` + auto-ASR `referenceText` + `customVoices` registration), visual multi-speaker dialogue authoring, or the **Workspace Library** click-to-seek subtitle player across 5 synced themes (**Native Airy / Warm Cream / Claude Warmth / Bright 8-Bit / Airy Mint**) with Coachmark onboarding.
 - **Speech-to-text (`voice_stt`) supports direct video files & keyless loopback Whisper**:
   - **Recommended**: Open **DSH → Settings → Plugins → Voice (`dsh-voice`)**, pick `asrEngine` (`groq` by default, `openai`, `siliconflow`, or `custom`), and paste `asrApiKey` (masked and **applied live on save without restarting**; when `custom` points to `127.0.0.1` or `localhost`, no key is required). Pass audio or `.mp4`/`.mkv`/`.mov`/`.avi` video files directly;
-  - **Custom voice aliases (`customVoices`) & word-boundary pronunciation lexicon (`pronunciations`)**: Save reusable named characters and pronunciation rules (e.g. `Nginx` → `Engine X`, `OS` → `Operating System` without corrupting `POST`) in DSH Settings or Voice Studio (live-reloaded without restarting);
+  - **Custom voice aliases (`customVoices`) & pronunciation lexicon (`pronunciations`)**: Manage directly from chat via `voice_prefs` (*"Default to documentary voice / remember Cordis as 科迪斯"*) or via DSH Settings / Voice Studio (live-reloaded without restarting);
   - **CLI / Environment variable**: Set `DSH_VOICE_ASR_KEY` (and optionally `DSH_VOICE_TTS_KEY`) or configure `cordis.patch.yml`:
 
 ```yaml
@@ -25,12 +25,12 @@
     # ttsModel: FunAudioLLM/CosyVoice2-0.5B
     # ttsApiKey: sk-...                   # prefer DSH Settings or DSH_VOICE_TTS_KEY
     # pronunciations:
-    #   - word: Nginx
+    #   - word: Nginx                     # built-in tech lexicon covers common terms by default; override or extend here
     #     alias: Engine X
-    #   - word: OS                      # ASCII word-boundary safe: matches "Mac OS"/"OS系统", never "POST"
+    #   - word: OS                        # ASCII word-boundary safe: matches "Mac OS"/"OS系统", never "POST"
     #     alias: Operating System
-    #   - word: SQL
-    #     alias: S Q L
+    #   - word: Cordis
+    #     alias: Cor-dis
     # customVoices:
     #   - name: narrator-wang
     #     persona: documentary-narrator
@@ -48,28 +48,28 @@
 
 ### Step 2: Keep Scripts, Subtitles, BGM, Reference Clips, Audio/Video & Outputs Inside Your Session Workspace
 
-All `voice_tts` input files (`inputFile`), reverse-dubbing subtitle files (`subtitleInput`, ≤200 cues), podcast background music (`bgmFile`), zero-shot cloning clips (`referenceAudio`, ≤10 MB), input audio/video (`audio`), and generated MP3 / `.txt` / `.srt` / `.vtt` / `.ass` / `chaptersOutput` / `voice_clones/` / `voice_outputs/` / preview files must resolve under the active DSH session workspace (`session.header.cwd`) to protect host files. Copy outside files into the workspace first.
+All `voice_tts` input files (`inputFile`), reverse-dubbing subtitle files (`subtitleInput`, ≤200 cues), podcast background music (`bgmFile`), zero-shot cloning clips (`referenceAudio`, ≤10 MB — including paths registered via `voice_prefs`), input audio/video (`audio`), and generated MP3 / `.txt` / `.srt` / `.vtt` / `.ass` / `chaptersOutput` / `.player.html` / `voice_clones/` / `voice_outputs/` / preview files must resolve under the active DSH session workspace (`session.header.cwd`) to protect host files. Copy outside files into the workspace first.
 
-### Step 3: Discover Voices/Personas, Audition, Synthesize or Transcribe, and Review in Workspace Library
+### Step 3: Fulfill Wishes in 1–2 Calls, Refine Naturally, or Save Defaults via Chat
 
-Unsure which voice fits best? Call `voice_list({ online: true, locale, gender, tag })` to fetch Microsoft's live 300+ neural voices (cached 24h in memory with automatic fallback to 45+ curated built-ins, plus the 10 built-in `persona` recipes and configured `customVoices`), then call `voice_preview` to render short samples plus an interactive `voice_previews/index.html` page. The plugin ships `skills/voice-workflow/SKILL.md` so your assistant automatically pairs `inputFile`, native MP3 chapters, karaoke `.ass` subtitles, inline `[pause:500ms]` beats, `segments` BGM podcasts, and direct video STT.
+Unsure which voice fits best? Ask for an audition by scene or style (*"Pick a few podcast / dialect / late-night radio voices"*): `voice_preview({ scene })` curates 3–4 contrasting live voices/personas and writes `voice_previews/index.html` in one call. For targeted catalog browsing, call `voice_list({ online: true, locale, gender, tag })` (24h cached 300+ online voices with fallback to 51 live-verified built-ins; chat output collapses >60 voices to the top 40 + locale summary while preserving the full structured list). The bundled Wish-Driven `skills/voice-workflow/SKILL.md` guides the assistant to combine `scene`, fuzzy styles, `targetDurationSec`, `createPlayer`, and `voice_prefs` seamlessly.
 
 ---
 
-## Copy-Ready Prompts for Everyday Work
+## Copy-Ready Wish-Driven Prompts
 
-- **Discover online voices & personas and audition via the interactive HTML page**
-  > Run `voice_list` with `online: true` for tag `podcast`, then preview a few alongside `late-night-radio` and `anime-boy` in `voice_previews/index.html` so I can pick my favorite.
-- **Narrate a multi-heading Markdown book/article with native MP3 chapters & show notes**
-  > Synthesize `guide.md` in this workspace using `documentary-narrator` into `guide.mp3` (embedding MP3 chapters), and export `guide.srt` plus chapter timestamps `guide-chapters.md`.
-- **Export vertical short-video clause captions & karaoke `.ass` with inline pauses**
-  > Read this short-video script with `energetic-anchor` (keep `[pause:500ms]` pauses, set `subtitleGranularity: "clause"` and `maxCharsPerCue: 14`), and save `clip.mp3` plus karaoke `clip.ass` for `dsh-ffmpeg` burn-in.
-- **Create a chaptered, loudness-balanced two-host podcast MP3 with BGM auto-ducking**
-  > Turn this release note into a chaptered two-host podcast (`title` on each segment) using `podcast-host-female` and `podcast-host-male`, mix `assets/bgm.mp3` with `bgmDucking: true` and `normalizeLoudness: true`, saving `episode.mp3`, `episode.srt`, and `episode-chapters.md`.
+- **Curate & audition voices by scene in one call**
+  > Pick a few voices for a podcast (or dialect / late-night radio / short-video) and generate `voice_previews/index.html` so I can compare them.
+- **Narrate a multi-heading Markdown book/article with native MP3 chapters & interactive HTML5 player**
+  > Turn `guide.md` in this workspace into a documentary-style audiobook (`guide.mp3` with embedded MP3 chapters), plus `guide.srt`, `guide-chapters.md`, and a clickable `guide.player.html`.
+- **Export a ≤30s vertical short-video voiceover & karaoke `.ass` with inline pauses**
+  > Read this short-video script in `short-video` style (keep `[pause:500ms]` beats and fit strictly within 30 seconds), saving `clip.mp3` and karaoke `clip.ass` for `dsh-ffmpeg` burn-in.
+- **Create a chaptered, loudness-balanced two-host podcast MP3 with BGM auto-ducking & player**
+  > Turn this release note into a chaptered two-host podcast using bilingual female & male hosts, mix `assets/bgm.mp3` with auto-ducking and loudness normalization, and save `episode.mp3`, `episode.srt`, `episode-chapters.md`, and an interactive player.
+- **Remember preferences directly from chat (`voice_prefs`)**
+  > Default to the documentary voice at `-5%` rate from now on, remember to pronounce `Cordis` as `Cor-dis`, and save `ref.wav` as a custom voice named `narrator-wang`.
 - **Zero-drift reverse-dub an existing `.srt`/`.vtt` timeline with word-boundary pronunciations**
-  > Dub `video.srt` in this workspace using `bilingual-tech-male`, pronouncing `OS` as `Operating System` and `Nginx` as `Engine X` (protecting words like `POST` and keeping original spelling in subtitles), save `dubbed.mp3` and `dubbed.srt`, and report exact `durationSec`.
-- **Emotion-directed acting or 5–10s zero-shot voice cloning (or 8s mic clone in Voice Studio)**
-  > Use `ref.wav` (transcript: "Hello, what a great day to start!") in this workspace for zero-shot cloning with cheerful acting `instructions` and inline `[laughter]`, saving `greeting.mp3`.
+  > Dub `video.srt` in `dubbing` mode (keep tech acronyms like `OS`, `Nginx`, and `SQL` natural without affecting `POST`, preserving original spelling in subtitles), save `dubbed.mp3` and `dubbed.srt`, and report exact `durationSec`.
 - **Transcribe a `.mp4` video or large recording directly with speaker diarization & subtitles**
   > Transcribe `lecture.mp4` directly in this workspace with `diarize: true` (prompt hint: DeepSeek Harness, Cordis), and save `lecture.txt` and `lecture.srt`.
 - **Scoped offline configuration self-check**
@@ -85,10 +85,11 @@ Run `voice_health` first (offline check with zero network traffic; supports `sco
 | :--- | :--- | :--- |
 | Health check says `asrApiKey` is missing | `asrApiKey` and `DSH_VOICE_ASR_KEY` are both empty | Safe to ignore if you only need TTS (`ttsReady` is `true`), or pass `scope: "tts"`; for local Whisper, set `asrEngine: custom` with `127.0.0.1`/`localhost` (no key needed) |
 | `referenceAudio` fails saying cloning engine is required | `ttsEngine` is still `edge` (Edge does not support zero-shot reference cloning) | Switch `ttsEngine` to `siliconflow` (`CosyVoice2-0.5B`) or `custom` (e.g. local GPT-SoVITS / IndexTTS) in **DSH Settings → Plugins → Voice** |
-| Direct video STT, `normalizeLoudness`, `bgmFile`, or dense `atempo` fit says `ffmpeg` is missing | Video stream stripping (`-vn`), `-16 LUFS` loudness mastering, `sidechaincompress` BGM ducking, and `atempo` window fitting require local `ffmpeg` | Install `ffmpeg` locally (or pre-process with `dsh-ffmpeg`), or pass plain audio / omit BGM & loudness flags |
-| Invalid voice ID, rate, or pitch error | `ttsVoice` is not a valid Edge ID, built-in `persona`, or `customVoices` alias, or `ttsRate`/`ttsPitch` format is invalid | Run `voice_list` to pick a valid ID or persona, and fix `ttsVoice` / `ttsRate` / `ttsPitch` in Settings |
+| Podcast loudness mastering shows a `warnings` note, or video STT / `bgmFile` / `atempo` says `ffmpeg` is missing | `-16 LUFS` loudness mastering, video stream stripping (`-vn`), BGM ducking, and `atempo` fitting require local `ffmpeg` | `normalizeLoudness` degrades gracefully with `warnings` and still delivers the clean MP3; install local `ffmpeg` (or use `dsh-ffmpeg`) to enable full audio/video post-processing |
+| `voice_prefs` reports settings cannot be persisted | Host is in read-only mode (`settings.writable === false`) or host settings service is unavailable | Edit preferences manually in **DSH Settings → Plugins → Voice**, or pass parameters directly per `voice_tts` call |
+| Invalid voice ID, rate, or pitch error | Value does not match a valid Edge ID, built-in `persona`, fuzzy style keyword, or `customVoices` alias, or `rate`/`pitch` format is invalid | Pass a fuzzy style keyword (e.g. `"深夜"`, `"纪录片"`, `"粤语男声"`) or run `voice_list` to pick a valid ID and fix prosody format |
 | Network error on TTS or STT | Direct connection blocked by corporate network | Enter `proxyUrl` (`http://`, `https://`, `socks5://`, or `socks5h://`) in **DSH Settings → Plugins → Voice** (applies live) |
-| Path outside session workspace error | Script, subtitle, BGM, reference clip, video/audio, or output resolves outside workspace | Copy the file into the current session workspace folder first |
+| Path outside session workspace error | Script, subtitle, BGM, reference clip (including `voice_prefs`), video/audio, or output resolves outside workspace | Copy the file into the current session workspace folder first |
 | Audio exceeds 25 MB limit | Standard Whisper / ASR multipart cap is 25 MB | Pass `autoCompress: true` to `voice_stt` (video files auto-extract 16kHz mono via local `ffmpeg`; large audio compresses/segments automatically) or pre-process with `dsh-ffmpeg` |
 | ASR or TTS refuses a 3xx redirect | Redirects are blocked so audio/keys never leak to another host | Set `asrBaseUrl` / `ttsBaseUrl` directly to the final non-redirecting `/v1` endpoint |
 | Existing output file was not overwritten | `overwrite: false` (default) suffixes `_1`, `_2` safely | Use the exact path returned by the tool, or enable `overwrite` in Settings |
@@ -97,20 +98,38 @@ Run `voice_health` first (offline check with zero network traffic; supports `sco
 
 ## Tool & Voice Studio Reference
 
-### Registered Tools (All 5)
+### Registered Tools (All 6)
 
 | Tool | Purpose | Key Parameters & Notes |
 | :--- | :--- | :--- |
-| `voice_tts` | Synthesize MP3, chapters & subtitles from text, files, timelines, or dialogues | Supports `text` (with inline `[pause:500ms]`/`[break:600ms]`/`[停顿0.6s]`), `inputFile` (≤100k chars auto-chunked; multi-heading `.md` embeds native MP3 ID3v2 `CHAP`/`CTOC` chapters), `cleanMarkdown` (default `true` for `.md`), `subtitleInput` (`.srt`/`.vtt` reverse dubbing, ≤200 cues, auto rate-scale + FFmpeg `atempo` zero-drift fit), `segments` (≤50 turns, per-turn `title`/`voice`/`persona`/`rate`/`pitch`/`pauseMs`/`instructions`/`referenceAudio`/`referenceText`), `pronunciations` (word-boundary safe), `subtitleOutput` (`.srt`/`.vtt`/`.ass` karaoke), `subtitleGranularity` (`sentence`/`clause`/`word`), `maxCharsPerCue` (`4–80`, default `16`), `chaptersOutput` (`.md`/`.txt` timestamps or `.json`), `bgmFile` / `bgmVolume` / `bgmDucking`, `normalizeLoudness` (`-16 LUFS`), `persona`, `instructions`, `referenceAudio` (≤10 MB), `referenceText`, `voice`, `rate`, `pitch`, `output`; returns VBR-accurate `durationMs`, `durationSec`, and optional `chapters` / `chaptersFile` |
-| `voice_stt` | Transcribe audio & video containers to text & subtitles | `audio` required (accepts audio plus `.mp4`/`.mkv`/`.mov`/`.avi` video containers, automatically stripping `-vn` into 16kHz mono via local `ffmpeg`); supports `diarize` (`true` enables FFmpeg stereo split or `[Speaker]` turn diarization with `speakers`), `autoCompress` (uses local `ffmpeg` for >25 MB), `timestamps`, `subtitleOutput` (`.srt`/`.vtt`), `model`, `language`, `prompt`, `output`, `engine` (`groq`/`openai`/`siliconflow`/`custom`) |
-| `voice_list` | Discover online/built-in voices, personas & custom aliases | Optional `online` (`true` fetches & caches 300+ live Microsoft Edge voices for 24h, falling back to 45+ curated built-ins), `locale`, `gender` (`Female`/`Male`), `tag` (e.g. `podcast`, `multilingual`, `dialect`, `child`, `teen`, `mature`, `elder`, `anime`, `documentary`), `includePersonas` (default `true`) |
-| `voice_preview` | Bounded-concurrency (≤3) batch previews + HTML page | Optional `voices` (≤8; accepts raw voice IDs, built-in `persona` IDs/labels, or `customVoices` aliases), `text` (≤200 chars), `outputDir`, `htmlIndex` (default `true`, writes `voice_previews/index.html`) |
+| `voice_tts` | Wish-driven synthesis for MP3s, chapters, subtitles & interactive HTML5 players | Supports `scene` (`podcast`/`short-video`/`audiobook`/`briefing`/`story`/`dubbing` + Chinese aliases), fuzzy style/dialect `voice`/`persona` (e.g. `"深夜"`, `"纪录片"`, `"粤语男声"`), `targetDurationSec` (`3–3600s`; auto rate-calibrated retry if >105%, FFmpeg `atempo` if still >103%, returning `durationAdjusted`), `autoPronunciations` (default `true`, built-in word-boundary-safe tech lexicon), `createPlayer` / `playerOutput` (writes self-contained `<stem>.player.html` and returns `playerFile`), `text` (with inline `[pause:500ms]`/`[停顿0.6s]`), `inputFile` (≤100k chars auto-chunked; multi-heading `.md` embeds native MP3 ID3v2 `CHAP`/`CTOC` chapters), `cleanMarkdown`, `subtitleInput` (`.srt`/`.vtt` zero-drift reverse dubbing), `segments` (≤50 turns, per-turn `title`/`voice`/`persona`/`rate`/`pitch`/`pauseMs`/`instructions`/`referenceAudio`/`referenceText`), `pronunciations`, `subtitleOutput` (`.srt`/`.vtt`/`.ass` karaoke), `subtitleGranularity` (`sentence`/`clause`/`word`), `maxCharsPerCue` (`4–80`, default `16`, `short-video` default `14`), `chaptersOutput` (`.md`/`.txt`/`.json`), `bgmFile`/`bgmVolume`/`bgmDucking`, `normalizeLoudness` (degrades gracefully with `warnings` when `ffmpeg` is absent), `instructions`, `referenceAudio`/`referenceText`, `rate`/`pitch`, `output`; returns VBR-accurate `durationMs`, `durationSec`, and optional `chapters`/`chaptersFile`/`playerFile`/`warnings` |
+| `voice_stt` | Transcribe audio & video containers to text & subtitles | `audio` required (accepts audio plus `.mp4`/`.mkv`/`.mov`/`.avi` video containers, automatically stripping `-vn` into 16kHz mono via local `ffmpeg`); supports `diarize` (`true` enables FFmpeg stereo split or `[Speaker]` turn diarization with `speakers`), `autoCompress` (uses local `ffmpeg` for >25 MB), `timestamps`, `subtitleOutput` (`.srt`/`.vtt`/`.ass`), `model`, `language`, `prompt`, `output`, `engine` (`groq`/`openai`/`siliconflow`/`custom`) |
+| `voice_list` | Discover online/built-in voices, personas & custom aliases | Optional `online` (`true` fetches & caches 300+ live Microsoft Edge voices for 24h, falling back to 51 live-verified built-ins; chat rendering collapses >60 voices to top 40 + locale breakdown while keeping full structured `voices`), `locale`, `gender` (`Female`/`Male`), `tag` (e.g. `podcast`, `multilingual`, `dialect`, `child`, `teen`, `mature`, `elder`, `anime`, `documentary`), `includePersonas` (default `true`) |
+| `voice_preview` | Curated scene/style or batch auditions (concurrency ≤3) + HTML page | Optional `scene` (auto-curates 3–4 contrasting live voices/personas for `podcast`, `short-video`, `audiobook`, `briefing`, `story`, `dubbing`, `方言`, `双语`, `深夜电台`, etc. when `voices` is omitted), `voices` (≤8; accepts raw voice IDs, 10 built-in personas, fuzzy style keywords, or `customVoices` aliases), `text` (≤200 chars), `outputDir`, `htmlIndex` (default `true`, writes `voice_previews/index.html`) |
 | `voice_health` | Offline configuration self-check | Optional `scope` (`all`/`tts`/`stt`), reports `ttsReady` / `sttReady` across engines, voice/persona/`customVoices` aliases, prosody, proxy, and keys |
+| `voice_prefs` | Persist creative voice preferences from chat | Required `action` (`get` / `set_default` / `add_pronunciation` / `remove_pronunciation` / `save_custom_voice` / `remove_custom_voice`); optional `voice`, `persona` (fuzzy styles supported), `rate`, `pitch`, `word`, `alias`, `name`, `instructions`, `referenceAudio` (workspace-validated, ≤10 MB), `referenceText`; strictly limited to creative prefs (`ttsVoice`, `ttsRate`, `ttsPitch`, `pronunciations`, `customVoices`) — never reads or modifies credentials, base URLs, proxies, or engines, and honors `settings.writable` |
+
+### `0.11.0` Wish-Driven Chat-First Upgrades
+
+1. **6 High-Level `scene` Presets & Smart Defaults**:
+   - `voice_tts` adds `scene` supporting `podcast` (`podcast-host-female`, `normalizeLoudness: true`, `bgmDucking: true`, `podcast.mp3`), `short-video` (`energetic-anchor`, `subtitleGranularity: "clause"`, `maxCharsPerCue: 14`, `short-video.mp3`), `audiobook` (`documentary-narrator`, `cleanMarkdown: true`, `audiobook.mp3`), `briefing` (`news-briefing`, `briefing.mp3`), `story` (`bedtime-story`, `story.mp3`), and `dubbing` (`bilingual-tech-male`, `dubbing.mp3`), plus Chinese aliases. Explicit parameters always override scene defaults.
+2. **Fuzzy Natural-Language Style & Dialect Matching (`resolveVoiceWish`)**:
+   - Across `voice_tts`, `voice_preview`, and `voice_prefs`, natural phrases resolve in priority order (custom alias → exact persona → valid Edge voice ID → Chinese/English style keywords → dialect/language fallback), e.g. `"深夜"` → `late-night-radio`, `"纪录片"` → `documentary-narrator`, `"粤语男声"` → `zh-HK-WanLungNeural`, `"东北话"` → `zh-CN-liaoning-XiaobeiNeural`, `"双语女"` → `bilingual-tech-female`.
+3. **Automatic `targetDurationSec` Fitting & Graceful `normalizeLoudness` Degradation**:
+   - Pass `targetDurationSec` (`3–3600s`) on single text, `inputFile`, or `segments`: audio exceeding `targetDurationSec * 1.05` triggers one calibrated rate re-synthesis, followed by pitch-preserving FFmpeg `atempo` if still `> 1.03x`, returning `targetDurationSec` and `durationAdjusted: true`.
+   - When local `ffmpeg` is missing, `normalizeLoudness: true` (including `scene: "podcast"` defaults) skips normalization gracefully instead of failing, delivering the clean MP3 alongside actionable `warnings`.
+4. **Built-In Word-Boundary-Safe Tech Lexicon (`autoPronunciations`)**:
+   - Enabled by default (`autoPronunciations: true`) with conservative ASCII word-boundary rules (`Nginx` → `Engine X`, `SQL` → `S Q L`, `K8s`/`Kubernetes` → `K 8 s`, `CLI` → `C L I`, `GUI` → `G U I`, `OAuth` → `O Auth`, `PostgreSQL` → `Postgres`, `kubectl` → `cube control`, `GraphQL` → `Graph Q L`, `WebSocket` → `Web Socket`), merged beneath Settings and per-call `pronunciations`.
+5. **Self-Contained Interactive HTML5 Player (`createPlayer` / `playerOutput`)**:
+   - Set `createPlayer: true` (emits `<stem>.player.html` next to the MP3) or specify `playerOutput` to generate a zero-dependency, XSS-escaped interactive HTML5 player with light/dark theme, speed control, MP3 download, chapter navigation, and click-to-seek synchronized subtitles (auto-collecting cues even if `subtitleOutput` was omitted).
+6. **Curated Scene Auditions (`voice_preview({ scene })`) & 6th Tool `voice_prefs`**:
+   - `voice_preview({ scene })` selects 3–4 contrasting live-verified personas/voices for any scene or style (`"podcast"`, `"short-video"`, `"方言"`, `"双语"`, `"深夜电台"`, etc.) in one call.
+   - `voice_prefs` persists default voice/persona/prosody, pronunciation rules, and custom voice aliases live via optional host `settings` injection (preserving `export const inject = ['tools']`), under strict non-credential allowlisting, workspace `referenceAudio` validation, and read-only `settings.writable` guards.
 
 ### `0.10.0` True Creative Loop, Karaoke Subtitles, MP3 Chapters & Pro Audio Upgrades
 
 1. **Short-Video Word/Clause Subtitles & Karaoke `.ass` Export**:
-   - `voice_tts` adds `subtitleGranularity` (`"sentence"` default | `"clause"` compact short-video phrases | `"word"` per-word cues) and `maxCharsPerCue` (default `16`, counting CJK/fullwidth as `1` and ASCII as `0.5`, splitting at clause punctuation or `≥350ms` silence gaps);
+   - `voice_tts` supports `subtitleGranularity` (`"sentence"` default | `"clause"` compact short-video phrases | `"word"` per-word cues) and `maxCharsPerCue` (default `16`, counting CJK/fullwidth as `1` and ASCII as `0.5`, splitting at clause punctuation or `≥350ms` silence gaps);
    - `subtitleOutput: "clip.ass"` outputs `1080x1920` SubStation Alpha (`v4.00+`) files with genuine `{\kf<cs>}` word-by-word karaoke highlight timing ready for `dsh-ffmpeg` burn-in.
 2. **Inline Speech Pause Tags & Word-Boundary-Safe Pronunciation Lexicon**:
    - Embed `[pause:500ms]`, `[break:600ms]`, or `[停顿0.6s]` (`50–10000ms`) directly in scripts — synthesized across Edge (reusing the keep-alive WSS pool) and OpenAI/SiliconFlow/custom engines with matched-sample-rate MP3 silence frames, and automatically stripped from `.srt`/`.vtt`/`.ass` subtitles;
@@ -124,7 +143,7 @@ Run `voice_health` first (offline check with zero network traffic; supports `sco
    - `subtitleInput` follows rate-scaled re-synthesis with pitch-preserving FFmpeg `atempo` window fitting whenever a dense cue still exceeds its window by `>3%`, eliminating cumulative timeline drift;
    - `concatMp3Buffers` strips leading/trailing ID3 tags and per-segment `Xing`/`Info`/`VBRI` metadata frames on multi-segment VBR MP3 concatenation so player seekbars and `durationSec` reflect the full episode;
    - Edge TTS reuses a proxy-keyed keep-alive WebSocket connection pool (with unref'd idle timers) and retries transient network drops automatically.
-6. **Voice Studio Workbench "True Creative Loop" (5 Tabs)**:
+6. **Voice Studio Workbench (5 Themes · 5 Tabs)**:
    - **8-Second Mic Direct-to-Clone Creator** (**Mic & Custom Voices** tab): Record 5–10s in the browser to save under `voice_clones/`, auto-transcribe `referenceText` via ASR, and register in `customVoices` in 1 click;
    - **Visual Multi-Speaker Dialogue Composer** (**Studio** tab): Add/edit speaker turns, optionally save `.mp3` + `.srt` to `voice_outputs/`, and synthesize & play multi-host dialogues directly inside the sidebar;
    - **5th "Workspace Library" Tab & Click-to-Seek Subtitle Player**: Browse workspace audio + paired `.srt`/`.vtt` files, download MP3s in 1 click, and click any highlighted cue in the player bar to seek immediately.
@@ -132,12 +151,12 @@ Run `voice_health` first (offline check with zero network traffic; supports `sco
 ### `0.8.0`–`0.9.0` Voice Studio & Diversity Foundation
 
 1. **5 Synced Themes & Coachmark Tour**: Live theme switching across **Native Airy / Warm Cream / Claude Warmth / Bright 8-Bit / Airy Mint** with spotlight onboarding.
-2. **300+ Live Edge Voices, 45+ All-Age/Dialect Built-ins & 10 `persona` Presets**:
-   - `voice_list({ online: true })` caches Microsoft's 300+ neural voices for 24h with offline fallback (`source: "builtin-fallback"`) to 51 live-verified Edge voices across child/story (`XiaoyiNeural`/`en-US-AnaNeural`), teen/anime (`YunxiaNeural`), mature/documentary/elder (`YunjianNeural`/`YunyangNeural`/`en-US-RogerNeural`), multilingual (`en-US-AvaMultilingualNeural`/`AndrewMultilingualNeural`), and Chinese dialects (Northeast, Shaanxi, Cantonese, Taiwanese);
+2. **300+ Live Edge Voices, 51 Live-Verified All-Age/Dialect Built-ins & 10 `persona` Presets**:
+   - `voice_list({ online: true })` caches Microsoft's 300+ neural voices for 24h with offline fallback (`source: "builtin-fallback"`) to 51 live-verified Edge voices across child/story (`XiaoyiNeural`/`en-US-AnaNeural`), teen/anime (`YunxiaNeural`), mature/documentary/elder (`YunjianNeural`/`YunyangNeural`/`en-US-RogerNeural`), multilingual (`en-US-AvaMultilingualNeural`/`en-US-BrianMultilingualNeural`), and Chinese dialects (Northeast, Shaanxi, Cantonese, Taiwanese);
    - 10 ready-made `persona` presets: `late-night-radio`, `podcast-host-female`, `podcast-host-male`, `documentary-narrator`, `bedtime-story`, `anime-boy`, `energetic-anchor`, `news-briefing`, `bilingual-tech-female`, `bilingual-tech-male`.
 3. **Podcast BGM Auto-Ducking (`bgmFile`), `-16 LUFS` Mastering, Emotion `instructions` & SHA-256 Cached Cloning**:
    - `bgmFile` ducks music under speech via FFmpeg `sidechaincompress` with end fade-out and optional `-16 LUFS` loudness normalization (`normalizeLoudness: true`);
-   - `instructions` passes natively to `gpt-4o-mini-tts` or formats `<|endofprompt|>` on CosyVoice2 (with `[laughter]`/`[breath]`), plus Kokoro voice blending (`zf_xiaobei*0.6+zf_xiaoni*0.4`); SiliconFlow caches uploaded `referenceAudio` `speech:...` URIs by SHA-256 hash across segments.
+   - `instructions` passes natively to `gpt-4o-mini-tts` or formats `<|endofprompt|>` on CosyVoice2 (with `[laughter]`/`[breath]`), plus Kokoro voice blending (`zf_xiaobei*0.6+zf_xiaoni*0.4`); SiliconFlow scopes and caches uploaded `referenceAudio` `speech:...` URIs per account by SHA-256 hash across segments.
 4. **Speaker Diarization (`diarize: true`)**: Splits stereo channels via `ffmpeg` or infers speaker turns from `verbose_json` to emit `[说话人 A]` paragraphs, `speakers` list, and speaker-prefixed `.srt`/`.vtt` cues.
 
 ### Engine Presets & Workspace Guardrails
@@ -145,9 +164,9 @@ Run `voice_health` first (offline check with zero network traffic; supports `sco
 - **Engine presets**:
   - `asrEngine`: `groq` (`whisper-large-v3-turbo`), `openai` (`whisper-1`), `siliconflow` (`FunAudioLLM/SenseVoiceSmall`), `custom` (keyless when targeting loopback `127.0.0.1` / `localhost`).
   - `ttsEngine`: `edge` (zero-key default), `openai` (`gpt-4o-mini-tts`), `siliconflow` (`FunAudioLLM/CosyVoice2-0.5B`), `custom` (OpenAI `/audio/speech`-compatible endpoint).
-- **Workspace confinement & symlink protection**: All reads and writes (`inputFile`, `referenceAudio`, `audio`, `chaptersOutput`, Studio `voice_clones`/`voice_outputs`, and all outputs) stay under `session.header.cwd`, symlinks are never written through, new files use `O_EXCL`, and `.txt`/subtitle outputs use `0600` permissions on POSIX.
-- **Pinned endpoint & redirect block**: Requests only go to the configured endpoint, mismatched `engine` overrides are rejected, `3xx` redirects abort immediately, and Studio HTTP endpoints enforce `X-DSH-VOICE: 1`, same-origin guards, and secret masking.
-- **Live timeouts & instant cancellation**: `timeoutMs`, `pronunciations`, and `customVoices` update dynamically on config save; `voice_tts`, `voice_preview`, `voice_list`, and `voice_stt` propagate `exec.signal` to close WebSockets and abort extraction/compression/uploads immediately on cancel.
+- **Workspace confinement & symlink protection**: All reads and writes (`inputFile`, `referenceAudio`, `audio`, `chaptersOutput`, `playerOutput`, `voice_prefs` clone paths, Studio `voice_clones`/`voice_outputs`, and all outputs) stay under `session.header.cwd`, symlinks are never written through, new files use `O_EXCL`, and `.txt`/subtitle outputs use `0600` permissions on POSIX.
+- **Pinned endpoint, non-credential preference allowlist & redirect block**: Requests only go to the configured endpoint, mismatched `engine` overrides are rejected, `3xx` redirects abort immediately, `voice_prefs` enforces a strict non-credential allowlist and read-only checks, interactive player HTML/JSON escapes all strings against XSS, and Studio HTTP endpoints enforce `X-DSH-VOICE: 1`, same-origin guards, and secret masking.
+- **Live timeouts & instant cancellation**: `timeoutMs`, `pronunciations`, and `customVoices` update dynamically on config save; `voice_tts`, `voice_preview`, `voice_list`, `voice_stt`, and `voice_prefs` propagate `exec.signal` to close WebSockets and abort extraction/compression/uploads immediately on cancel.
 
 ## Install, Uninstall & Development
 

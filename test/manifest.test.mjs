@@ -35,7 +35,7 @@ test('名称与版本', async () => {
     tools: { register(def) { active.add(def.name); return () => active.delete(def.name) } },
     effect(fn) { effects.push(fn()) },
   }, {})
-  assert.equal(active.size, 5)
+  assert.equal(active.size, 6)
   for (const dispose of effects) dispose?.()
   assert.equal(active.size, 0)
 })

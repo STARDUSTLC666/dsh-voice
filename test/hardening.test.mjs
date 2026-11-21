@@ -229,21 +229,24 @@ test('voice_stt：相对 audio 按 session.header.cwd 解析并读到文件', as
   rmSync(sessionDir, { recursive: true, force: true })
 })
 
-// ---------- 5) 文档与描述覆盖全部 5 个注册工具 ----------
+// ---------- 5) 文档与描述覆盖全部 6 个注册工具 ----------
 
-test('使用说明 / package.json / 插件入口注释覆盖全部 5 个注册工具', () => {
+test('使用说明 / package.json / 插件入口注释覆盖全部 6 个注册工具', () => {
   const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'))
+  const allTools = ['voice_tts', 'voice_stt', 'voice_list', 'voice_preview', 'voice_health', 'voice_prefs']
   // description 是一句话、不罗列工具名；详细清单在使用说明中。
   assert.ok(typeof pkg.description === 'string' && pkg.description.trim() !== '', 'package.json 描述不能为空')
-  for (const name of ['voice_tts', 'voice_stt', 'voice_list', 'voice_preview', 'voice_health']) {
+  for (const name of allTools) {
     assert.ok(!pkg.description.includes(name), 'package.json 描述不应罗列工具名：' + name)
   }
   for (const file of ['docs/USAGE.md', 'docs/USAGE.en.md']) {
     const text = readFileSync(join(here, '..', file), 'utf8')
-    for (const name of ['voice_tts', 'voice_stt', 'voice_list', 'voice_preview', 'voice_health']) {
+    for (const name of allTools) {
       assert.ok(text.includes(name), file + ' 缺少 ' + name)
     }
   }
   const entry = readFileSync(join(here, '..', 'src', 'index.ts'), 'utf8')
-  assert.ok(entry.includes('voice_preview') && entry.includes('voice_health'), 'src/index.ts 注释未提及 voice_preview / voice_health')
+  for (const name of allTools) {
+    assert.ok(entry.includes(name), 'src/index.ts 注释未提及 ' + name)
+  }
 })
