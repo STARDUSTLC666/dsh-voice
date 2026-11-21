@@ -39,23 +39,26 @@ test('Layer 1: Expanded VOICES covers child, teen, documentary, elder, and diale
 
   const ids = new Set(VOICES.map((v) => v.id))
   for (const requiredId of [
-    'zh-CN-XiaoshuangNeural', // child
-    'zh-CN-YunxiaNeural',     // teen / anime
-    'zh-CN-YunzeNeural',      // mature / documentary
-    'zh-CN-XiaoruiNeural',    // elder
-    'zh-HK-WanLungNeural',    // Cantonese male
-    'zh-TW-YunJheNeural',     // Taiwanese male
-    'zh-CN-henan-YundengNeural', // Henan dialect
+    'zh-CN-XiaoyiNeural',       // child / story
+    'zh-CN-YunxiaNeural',       // teen / anime
+    'zh-CN-YunjianNeural',      // mature / documentary
+    'en-US-AnaNeural',          // English child
+    'en-US-RogerNeural',        // elder / mature
+    'zh-HK-WanLungNeural',      // Cantonese male
+    'zh-TW-YunJheNeural',       // Taiwanese male
+    'zh-CN-liaoning-XiaobeiNeural', // Northeast dialect
+    'zh-CN-shaanxi-XiaoniNeural',   // Shaanxi dialect
   ]) {
     assert.ok(ids.has(requiredId), `Missing required voice in VOICES: ${requiredId}`)
     assert.equal(isValidVoiceId(requiredId), true, `isValidVoiceId failed for ${requiredId}`)
   }
 
   const childVoices = filterVoices({ tag: 'child' })
-  assert.ok(childVoices.some((v) => v.id === 'zh-CN-XiaoshuangNeural'))
+  assert.ok(childVoices.some((v) => v.id === 'zh-CN-XiaoyiNeural'))
+  assert.ok(childVoices.some((v) => v.id === 'en-US-AnaNeural'))
 
   const dialectVoices = filterVoices({ tag: 'dialect' })
-  assert.ok(dialectVoices.some((v) => v.id === 'zh-CN-henan-YundengNeural'))
+  assert.ok(dialectVoices.some((v) => v.id === 'zh-CN-liaoning-XiaobeiNeural'))
   assert.ok(dialectVoices.some((v) => v.id === 'zh-HK-WanLungNeural'))
 })
 

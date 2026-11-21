@@ -60,12 +60,14 @@ export declare function closeEdgeConnectionPool(): void;
  * 本地生成 Sec-MS-GEC v2 令牌（对齐 edge-tts 7.3.1）。
  */
 export declare function generateSecMsGec(nowSeconds?: number): string;
+/** 将仅 Azure 支持的旧版音色 ID 兼容映射为实时 Edge ReadAloud 可用音色。 */
+export declare function resolveEdgeVoiceId(voice: string): string;
 /** 生成 SSML。 */
 export declare function buildSsml(options: TtsOptions): string;
 export type EdgeBoundaryMode = 'sentence' | 'word' | 'all' | false;
 /**
  * 合成语音并可选返回句/词级边界字幕时间轴。
- * 支持 Keep-Alive WebSocket 连接池复用、HTTP 403 时钟自动校准与瞬态断连自动重试。
+ * 支持 Keep-Alive WebSocket 连接池复用、行内 `[pause:...]` 静音帧拼接、HTTP 403 时钟自动校准与瞬态断连自动重试。
  * @throws 文本为空/超长 / 连接失败 / 超时 / 无音频数据时抛中文错误。
  */
 export declare function synthesizeSpeechWithMetadata(options: TtsOptions & {

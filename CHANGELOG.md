@@ -1,5 +1,14 @@
 # 更新记录
 
+## 0.10.8 (2026-11-22)
+
+- 修复微软免费 Edge ReadAloud 端对 SSML `<sub alias>` 与 `<break>` 拒收导致 `WS 1007 "SSML is invalid"` 的问题：`pronunciations` 在 Edge 端改为词边界安全的纯文本替读（避免转义破坏），行内 `[pause:...]` / `[break:...]` / `[停顿...]` 改为多段复用连接池合成并无缝拼接同采样率静音帧与偏移字幕时间轴，实测全流程零报错。
+- Fix live Microsoft Edge ReadAloud `WS 1007 "SSML is invalid"` rejections caused by `<sub alias>` and `<break>` tags: Edge now applies word-boundary-safe plain-text pronunciation substitution before XML escaping and synthesizes inline `[pause:...]` segments over the keep-alive WSS pool with matched-sample-rate silence frames and offset subtitle cues.
+- 全面对齐微软 Edge 实时可用音色目录并补齐旧 Azure 音色兼容映射：将内置音色更新为 51 个全部通过真实 Edge WSS 验证的在线音色，替换 6 套原本指向 Azure 专属音色及 1 个实测断连音色的人设配方（10/10 人设全部真机实测通过），并为 18 个历史 Azure 音色 ID 提供自动平滑映射（`resolveEdgeVoiceId`）；Edge WebSocket 遇到服务端 1007/1003/1008 等非瞬时拒收码立即返回明确中文原因不再空转重试，并修复 `sleepWithAbort` 的 `.unref()` 提前退出问题。
+- Align built-in voices and personas with live Microsoft Edge ReadAloud availability: replace 18 Azure-only voice IDs with 51 live-verified Edge voices, update all 10/10 `VOICE_PERSONAS` to live-verified Edge voices (`bilingual-tech-male` -> `en-US-BrianMultilingualNeural`), add automatic legacy fallback mapping (`resolveEdgeVoiceId`), fail fast with clear error messages on non-transient WebSocket close codes (`WS 1007`/`1003`/`1008`), and fix `sleepWithAbort` `.unref()` premature exits in standalone Node runs.
+- 修复 React 19 `useId()` 含冒号 ID（如 `:r19:`）导致 Voice Studio 侧边栏 Coachmark 新手引导 `querySelector` 抛出 `SyntaxError` 崩溃槽位的问题：清理工作台 Tabs `baseId` 并在 `CoachmarkTour` 增加安全选择器解析与 `getElementById` 回退，同时替换工作台过期的 Azure 音色默认占位符。
+- Fix React 19 `useId()` colon selector crash (`SyntaxError` in `CoachmarkTour` `querySelector`) by sanitizing Voice Studio tab IDs and adding safe `CSS.escape` / `getElementById` fallback in `CoachmarkTour`, and update stale Azure voice placeholders in Voice Studio.
+
 ## 0.10.7 (2026-11-20)
 
 - 升级共享更新组件至 0.2.10，移除跨插件右下角浮动提醒，保留工作台及插件详情页更新控制。

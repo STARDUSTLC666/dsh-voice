@@ -348,9 +348,32 @@ function createWorkbenchUI(React, require) {
       function measure() {
         const scope = rootRef?.current || (typeof document !== 'undefined' ? document : null);
         if (!scope || typeof scope.querySelector !== 'function') return;
-        const target = (current.selector && scope.querySelector(current.selector))
-          || (current.fallback && scope.querySelector(current.fallback))
-          || null;
+        let target = null;
+        try {
+          // Guard against invalid CSS selectors (e.g. React 19 useId returns
+          // IDs like ':r19:' containing colons that are invalid in querySelector).
+          // If the selector is a bare '#<id>' with no combinators, use CSS.escape
+          // or fall back to getElementById for maximum safety.
+          const resolveSelector = sel => {
+            if (!sel) return null;
+            if (/^#[^\s>+~,[\]()]+$/.test(sel)) {
+              const rawId = sel.slice(1);
+              if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+                return scope.querySelector('#' + CSS.escape(rawId));
+              }
+              // getElementById always works regardless of special characters
+              const byId = (scope.getElementById || document.getElementById)?.call(
+                scope === document ? document : document, rawId
+              );
+              return byId || null;
+            }
+            return scope.querySelector(sel);
+          };
+          target = resolveSelector(current.selector) || resolveSelector(current.fallback) || null;
+        } catch {
+          // Swallow any remaining querySelector SyntaxError — never crash the slot
+          target = null;
+        }
         setLayout?.(computeTourLayout(target, current.side, cardRef.current));
       }
       measure();

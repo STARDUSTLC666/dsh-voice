@@ -203,7 +203,8 @@ test('P0 voices：isValidVoiceId 与 filterVoices 支持 Multilingual、方言�
   const males = filterVoices({ gender: 'male' })
   assert.ok(males.length > 0 && males.every((v) => v.gender === 'Male'))
   const multi = filterVoices({ tag: 'multilingual' })
-  assert.ok(multi.some((v) => v.id === 'zh-CN-XiaoxiaoMultilingualNeural'))
+  assert.ok(multi.some((v) => v.id === 'en-US-AvaMultilingualNeural'))
+  assert.ok(multi.some((v) => v.id === 'en-US-AndrewMultilingualNeural'))
 })
 
 // ---------- P0: Config, Health & Live Timeout ----------

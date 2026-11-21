@@ -1,5 +1,5 @@
 /**
- * 常用音色清单（内置 45 个全年龄段/多风格/方言常用音色与 10 个开箱即用角色人设配方）。
+ * 常用音色清单（内置 51 个经实时 Edge ReadAloud 验证可用的全年龄段/多风格/方言音色与 10 个开箱即用角色人设配方）。
  *
  * @module dsh-voice/voices
  */
@@ -21,9 +21,9 @@ export interface VoicePersona {
     description: string;
     tags: string[];
 }
-/** 常用音色。 */
+/** 常用音色（全部经 Edge 线上目录实时核验可用）。 */
 export declare const VOICES: VoiceInfo[];
-/** 开箱即用角色人设配方（可直接传给 voice_tts / voice_preview 的 persona 参数）。 */
+/** 开箱即用角色人设配方（可直接传给 voice_tts / voice_preview 的 persona 参数，全部绑定真实 Edge 可用音色）。 */
 export declare const VOICE_PERSONAS: VoicePersona[];
 /** 校验音色 id：常用清单内或符合 edge-tts 命名规则（含方言/文字子标签/多语/HD 变体）。 */
 export declare function isValidVoiceId(id: string): boolean;

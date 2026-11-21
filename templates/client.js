@@ -140,7 +140,7 @@ window.__ModuleLoader__.load({
       const [bgmVolume, setBgmVolume] = useState('0.18');
       const [podcastLoudness, setPodcastLoudness] = useState(true);
       const [srtFile, setSrtFile] = useState('video.srt');
-      const [dubVoice, setDubVoice] = useState('zh-CN-YunzeNeural');
+      const [dubVoice, setDubVoice] = useState('zh-CN-YunjianNeural');
       const [dubOut, setDubOut] = useState('dubbing.mp3');
 
       // Tab 3: Mic Memo, 8s Direct-to-Clone Creator & Custom Voices
@@ -177,7 +177,8 @@ window.__ModuleLoader__.load({
       const [libraryItems, setLibraryItems] = useState([]);
       const [libraryLoaded, setLibraryLoaded] = useState(false);
 
-      const baseId = typeof useId === 'function' ? useId() : 'dsh-voice';
+      const rawUid = typeof useId === 'function' ? useId() : 'dsh-voice';
+      const baseId = 'dshv-' + String(rawUid).replace(/[^a-zA-Z0-9_-]/g, '');
       const tabsId = baseId + '-tabs';
       const controller = useRef(null);
 
@@ -1056,7 +1057,7 @@ window.__ModuleLoader__.load({
               ),
               h('label', { className: 'voice-field' },
                 h('span', null, vText('配音音色 / 人设', 'Target Voice / Persona')),
-                h(W.Input, { value: dubVoice, placeholder: 'zh-CN-YunzeNeural', onChange: e => setDubVoice(e.target.value) }),
+                h(W.Input, { value: dubVoice, placeholder: 'zh-CN-YunjianNeural', onChange: e => setDubVoice(e.target.value) }),
               ),
               h('label', { className: 'voice-field voice-field-span2' },
                 h('span', null, vText('输出音频路径', 'Output MP3 path')),
@@ -1299,7 +1300,7 @@ window.__ModuleLoader__.load({
                 ),
                 h('label', { className: 'voice-field' },
                   h('span', null, vText('底层音色 ID', 'Voice ID')),
-                  h(W.Input, { value: customDraft.voice, placeholder: 'zh-CN-YunzeNeural', disabled: !writable || !!busy, onChange: e => setCustomDraft({ ...customDraft, voice: e.target.value }) }),
+                  h(W.Input, { value: customDraft.voice, placeholder: 'zh-CN-YunjianNeural', disabled: !writable || !!busy, onChange: e => setCustomDraft({ ...customDraft, voice: e.target.value }) }),
                 ),
                 h('label', { className: 'voice-field' },
                   h('span', null, vText('继承人设 ID', 'Persona ID')),
@@ -1379,8 +1380,8 @@ window.__ModuleLoader__.load({
               h('span', { className: 'dsh-wb-count' }, pronunciations.length),
             ),
             h('p', { className: 'voice-muted' }, vText(
-              '支持 ASCII 词边界安全匹配（如 OS 绝不误伤 POST）；Edge TTS 生成 SSML <sub alias> 保留原词字幕，OpenAI/SiliconFlow 自动替读。',
-              'Word-boundary safe matching (e.g. OS never corrupts POST); Edge TTS emits SSML <sub alias> keeping original subtitle text.',
+              '支持 ASCII 词边界安全匹配（如 OS 绝不误伤 POST），在 Edge / OpenAI / SiliconFlow 合成前自动按替读发音处理。',
+              'Word-boundary safe matching (e.g. OS never corrupts POST), applied cleanly across Edge, OpenAI, and SiliconFlow.',
             )),
             h('div', { className: 'dsh-wb-prompt-chips' },
               presets.map(p => h(W.Button, {

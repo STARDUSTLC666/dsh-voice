@@ -22,10 +22,12 @@ import {
   inspectMp3Buffer,
   isVideoContainerFile,
   resolveConfig,
+  resolveEdgeVoiceId,
   splitInlinePauses,
   stripInlinePauses,
   stripMp3MetadataFrame,
   synthesizeSpeech,
+  synthesizeSpeechWithMetadata,
   VOICE_STUDIO_API_ROUTE,
 } from '../lib/index.js'
 
@@ -229,14 +231,16 @@ test('v0.10 Upgrade 2b: Edge WebSocket 瞬时断连在 maxRetries: 1 下自动�
 
 // ---------- 3. Word-Boundary Pronunciations & Inline [pause:500ms] ----------
 
-test('v0.10 Upgrade 3: 英文词边界保护不误伤 POST 子串，内联 [pause] 支持 Edge <break/> 与非 Edge 静音帧拼接', async (t) => {
+test('v0.10 Upgrade 3: 英文词边界保护不误伤 POST 子串，Edge 与非 Edge 均安全处理词典与行内 [pause] 静音帧拼接', async (t) => {
+  t.after(() => closeEdgeConnectionPool())
   assert.equal(buildPronunciationPattern([]), null)
   const plain = applyPronunciationsPlain('POST request on Mac OS系统', [{ word: 'OS', alias: 'Operating System' }])
   assert.equal(plain, 'POST request on Mac Operating System系统')
 
+  // Edge 免费 ReadAloud 端点拒绝 <sub alias> 与 <break> 标签，buildSsml 必须输出 Edge 兼容纯文本替读且映射旧版 Azure 音色
   const ssml = buildSsml({
     text: 'POST on OS [pause:600ms] 重构',
-    voice: 'zh-CN-XiaoxiaoNeural',
+    voice: 'zh-CN-YunzeNeural',
     rate: '+0%',
     pitch: '+0Hz',
     pronunciations: [
@@ -244,11 +248,82 @@ test('v0.10 Upgrade 3: 英文词边界保护不误伤 POST 子串，内联 [paus
       { word: '重构', alias: '虫构' },
     ],
   })
-  assert.ok(ssml.includes('POST on '), `POST 应保持原样，实际 SSML：${ssml}`)
-  assert.ok(!ssml.includes("alias='O S'>OS</sub>T"), '不应误匹配 POST 内部的 OS')
-  assert.ok(ssml.includes("<sub alias='O S'>OS</sub>"))
-  assert.ok(ssml.includes("<break time='600ms'/>"))
-  assert.ok(ssml.includes("<sub alias='虫构'>重构</sub>"))
+  assert.equal(resolveEdgeVoiceId('zh-CN-YunzeNeural'), 'zh-CN-YunjianNeural')
+  assert.ok(ssml.includes("voice name='zh-CN-YunjianNeural'"))
+  assert.ok(!ssml.includes('<sub '), 'Edge SSML 不应包含会被 1007 拒绝的 <sub> 标签')
+  assert.ok(!ssml.includes('<break '), 'Edge SSML 不应包含会被 1007 拒绝的 <break> 标签')
+  assert.ok(ssml.includes('POST on O S 虫构'), `应保留 POST 并替读 OS 与重构，实际 SSML：${ssml}`)
+
+  // Edge synthesizeSpeechWithMetadata 遇到 [pause:480ms] 自动分段合成并插入同采样率静音帧（复用保活连接池）
+  let edgeTurns = 0
+  let edgeConnects = 0
+  const edgeSentSsml = []
+  const reusableFactory = () => {
+    edgeConnects += 1
+    const listeners = {}
+    const fire = (type, ev) => { for (const fn of listeners[type] ?? []) fn(ev) }
+    const socket = {
+      readyState: 0,
+      addEventListener(type, fn) { (listeners[type] ??= []).push(fn) },
+      send(data) {
+        if (typeof data === 'string' && data.includes('Path:ssml')) {
+          edgeTurns += 1
+          edgeSentSsml.push(data)
+          const pieceAudio = createSilenceMp3(240, 24000)
+          setTimeout(() => {
+            fire('message', { data: makeEdgeAudioFrame(pieceAudio) })
+            fire('message', { data: 'X-Timestamp:2026\r\nPath:turn.end\r\n' })
+          }, 0)
+        }
+      },
+      close() { socket.readyState = 3 },
+    }
+    setTimeout(() => { socket.readyState = 1; fire('open') }, 0)
+    return socket
+  }
+  const edgePaused = await synthesizeSpeechWithMetadata(
+    { text: '第一句 [pause:480ms] 第二句', voice: 'zh-CN-XiaoxiaoNeural', rate: '+0%', pitch: '+0Hz' },
+    { webSocketFactory: reusableFactory, usePool: true },
+    5000,
+  )
+  assert.equal(edgeConnects, 1, '两段应复用同一条保活连接')
+  assert.equal(edgeTurns, 2)
+  assert.ok(!edgeSentSsml[0].includes('pause') && !edgeSentSsml[1].includes('pause'))
+  const edgePausedMs = inspectMp3Buffer(edgePaused.audio).durationMs
+  assert.ok(edgePausedMs >= 936 && edgePausedMs <= 984, `Edge 240+480+240ms 期望约 960ms，实际 ${edgePausedMs}ms`)
+  closeEdgeConnectionPool()
+
+  // WS 1007 协议拒绝应立即透传原因且不做无效重试
+  let ws1007Connects = 0
+  const ws1007Factory = () => {
+    ws1007Connects += 1
+    const listeners = {}
+    const fire = (type, ev) => { for (const fn of listeners[type] ?? []) fn(ev) }
+    const socket = {
+      readyState: 0,
+      addEventListener(type, fn) { (listeners[type] ??= []).push(fn) },
+      send(data) {
+        if (typeof data === 'string' && data.includes('Path:ssml')) {
+          setTimeout(() => {
+            socket.readyState = 3
+            fire('close', { code: 1007, reason: 'SSML is invalid' })
+          }, 0)
+        }
+      },
+      close() { socket.readyState = 3 },
+    }
+    setTimeout(() => { socket.readyState = 1; fire('open') }, 0)
+    return socket
+  }
+  await assert.rejects(
+    () => synthesizeSpeech(
+      { text: 'test 1007', voice: 'zh-CN-XiaoxiaoNeural', rate: '+0%', pitch: '+0Hz' },
+      { webSocketFactory: ws1007Factory, usePool: false, maxRetries: 2 },
+      5000,
+    ),
+    /WS 1007: SSML is invalid/,
+  )
+  assert.equal(ws1007Connects, 1, '永久性 WS 1007 不应浪费重试')
 
   const pieces = splitInlinePauses('第一句 [pause:480ms] 第二句')
   assert.deepEqual(pieces, [

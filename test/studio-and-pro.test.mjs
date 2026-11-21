@@ -102,7 +102,7 @@ test('Pro 1: voice_tts 返回数值型 durationMs / durationSec 并在输出文�
 
 // ---------- 2. Pronunciation Lexicon (pronunciations) ----------
 
-test('Pro 2: buildSsml 发音词典生成 <sub alias> 且不破坏 XML 转义，省略时字节级一致', () => {
+test('Pro 2: buildSsml 发音词典采用 Edge 兼容纯文本替读且不破坏 XML 转义，省略时字节级一致', () => {
   const baseOpts = { text: 'Nginx & 重构 <test>', voice: 'zh-CN-XiaoxiaoNeural', rate: '+0%', pitch: '+0Hz' }
   const plainSsml = buildSsml(baseOpts)
   assert.equal(buildSsml({ ...baseOpts, pronunciations: [] }), plainSsml)
@@ -115,10 +115,9 @@ test('Pro 2: buildSsml 发音词典生成 <sub alias> 且不破坏 XML 转义，
       { word: '重构', alias: '虫构' },
     ],
   })
-  assert.ok(lexSsml.includes("<sub alias='Engine X'>Nginx</sub>"))
-  assert.ok(lexSsml.includes("<sub alias='虫构'>重构</sub>"))
-  assert.ok(lexSsml.includes('&amp;'))
-  assert.ok(lexSsml.includes('&lt;test&gt;'))
+  // 微软免费 Edge ReadAloud 端点会以 WS 1007 拒绝 <sub alias>，因此必须输出纯文本替读且保留 XML 转义
+  assert.ok(!lexSsml.includes('<sub '))
+  assert.ok(lexSsml.includes('Engine X &amp; 虫构 &lt;test&gt;'))
 })
 
 test('Pro 2: applyPronunciationsPlain 避免链式递归替换，Config 支持 pronunciations 校验与热更新', () => {

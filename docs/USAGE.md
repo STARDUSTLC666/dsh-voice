@@ -113,7 +113,7 @@
    - `voice_tts` 新增 `subtitleGranularity`（`"sentence"` 整句默认 | `"clause"` 竖屏短句智能切分 | `"word"` 逐词时间轴）与 `maxCharsPerCue`（默认 `16`，中日韩全角计 `1`、英文半角计 `0.5`，结合标点与 `≥350ms` 停顿切屏）；
    - `subtitleOutput` 支持导出 `.ass`（`1080x1920` SubStation Alpha `v4.00+`），自动拉取词级边界写入 `{\kf<cs>}` 逐词高亮时间标签，可直接交给 `dsh-ffmpeg` 烧录竖屏短视频动态字幕。
 2. **文稿内联停顿标签（`[pause:500ms]`）与词边界安全发音词典（`pronunciations`）**：
-   - 支持在文稿与台词中直接嵌入 `[pause:500ms]`、`[break:600ms]` 或 `[停顿0.6s]`（限幅 `50–10000ms`），Edge 引擎自动编译为原生 SSML `<break time="...ms"/>`，OpenAI / SiliconFlow / 自定义引擎自动插入匹配采样率 MP3 静音帧，且所有导出的 `.srt`/`.vtt`/`.ass` 字幕均自动剥离停顿标记；
+   - 支持在文稿与台词中直接嵌入 `[pause:500ms]`、`[break:600ms]` 或 `[停顿0.6s]`（限幅 `50–10000ms`），Edge（复用保活连接池）与 OpenAI / SiliconFlow / 自定义引擎均自动分段合成并插入匹配采样率 MP3 静音帧，且所有导出的 `.srt`/`.vtt`/`.ass` 字幕均自动剥离停顿标记；
    - `pronunciations` 对 ASCII 词汇（如 `OS`、`UI`、`SQL`、`AI`）自动启用词边界保护，精准匹配 `"Mac OS"` 与 `"OS系统"`，绝不破坏 `"POST"`、`"HOST"` 或 `"BUILD"` 等单词子串。
 3. **有声书与播客原生 MP3 章节（ID3v2.3 `CHAP`/`CTOC` + `chaptersOutput`）**：
    - `inputFile` 读取含 `#` / `##` / `###` 多标题的 Markdown 文稿（自动忽略代码块内的 `#` 注释并在章间留出 350ms 自然呼吸停顿），或在 `segments[]` 中为段落指定 `title`，即可零依赖向 MP3 头部写入原生可点击跳转的 ID3v2.3 `CTOC` + `CHAP` 章节书签（不影响 `inspectMp3Buffer` 帧时长统计）；
@@ -133,7 +133,7 @@
 
 1. **5 套同步主题与 Coachmark 引导**：支持 **原生清透 / 米白纸感 / Claude 暖书卷 / 8-Bit 像素 / 晴空薄荷** 5 套实时同步主题与聚光灯引导。
 2. **全量发现与全年龄/方言内置（45+ 内置 / 300+ 在线）与 10 大 `persona`**：
-   - `voice_list({ online: true })` 24h 缓存微软 300+ 神经音色，离线自动回退 45+ 精选音色（涵盖童声 `XiaoshuangNeural`/`XiaoyouNeural`、少年动漫 `YunxiaNeural`、成熟纪录片/老年 `YunzeNeural`/`XiaoqiuNeural`/`XiaoruiNeural`、激昂戏剧 `YunhaoNeural` 及东北/陕西/四川/河南/山东/粤语/台湾方言）；
+   - `voice_list({ online: true })` 24h 缓存微软 300+ 神经音色，离线自动回退 51 个经 Edge 实测可用的精选音色（涵盖绘本/童声 `XiaoyiNeural`/`en-US-AnaNeural`、少年动漫 `YunxiaNeural`、成熟纪录片/新闻 `YunjianNeural`/`YunyangNeural`、长者 `en-US-RogerNeural`、多语混读 `en-US-AvaMultilingualNeural`/`AndrewMultilingualNeural` 及东北/陕西/粤语/台湾方言）；
    - 内置 10 大 `persona`：`late-night-radio`、`podcast-host-female`、`podcast-host-male`、`documentary-narrator`、`bedtime-story`、`anime-boy`、`energetic-anchor`、`news-briefing`、`bilingual-tech-female`、`bilingual-tech-male`。
 3. **播客 BGM 自动闪避（`bgmFile`）、`-16 LUFS` 响度均衡、演技 `instructions` 与 SHA-256 缓存克隆**：
    - `bgmFile` 通过 FFmpeg `sidechaincompress` 在人声出现时自动压低配乐并在结尾淡出，可链式叠加 `normalizeLoudness: true`；
