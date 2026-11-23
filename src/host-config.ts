@@ -526,7 +526,7 @@ export const Config: HostSchemaNode<VoiceConfig> = z.object<VoiceConfig>({
     .description('同名输出文件是否直接覆盖（默认关闭，自动加序号防误盖）'),
   customVoices: z.array(z.object<CustomVoiceAlias>({
     name: z.string().required().description('自定义音色别名（如 老王、女主持、悬疑旁白）'),
-    voice: z.string().description('底层音色 ID 或混合表达式（可选，如 zh-CN-YunzeNeural、FunAudioLLM/CosyVoice2-0.5B:alex、zf_xiaobei*0.6+zf_xiaoni*0.4）'),
+    voice: z.string().description('底层音色 ID 或混合表达式（可选，如 zh-CN-YunjianNeural、FunAudioLLM/CosyVoice2-0.5B:alex、zf_xiaobei*0.6+zf_xiaoni*0.4）'),
     persona: z.string().description('继承的内置人设 ID（可选，如 late-night-radio）'),
     rate: z.string().description('专属语速（可选，如 -8%、+10%）'),
     pitch: z.string().description('专属音调（可选，如 -2Hz、+2Hz）'),

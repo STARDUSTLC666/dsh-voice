@@ -524,8 +524,8 @@ window.__ModuleLoader__.load({
           side: 'bottom',
           title: vText('音色库与字幕跟读试听', 'Voices & Follow-Along Preview'),
           desc: vText(
-            '浏览 45+ 全年龄与方言音色及 10 套人设，点击 ▶ 即时在线试听并在顶部字幕条点击任意句跳播。',
-            'Browse 45+ built-in voices & 10 personas, click ▶ for instant preview with click-to-seek subtitles.',
+            '浏览 51+ 全年龄与方言音色及 10 套人设，点击 ▶ 即时在线试听并在顶部字幕条点击任意句跳播。',
+            'Browse 51+ built-in voices & 10 personas, click ▶ for instant preview with click-to-seek subtitles.',
           ),
         },
         {
@@ -805,7 +805,7 @@ window.__ModuleLoader__.load({
         const voiceOptions = [
           ...customVoices.map(cv => ({ id: cv.name, label: `★ ${cv.name} (${vText('自定义角色', 'Custom')})` })),
           ...personas.map(p => ({ id: p.id, label: `${p.label} (${p.id})` })),
-          ...allVoices.slice(0, 45).map(v => ({ id: v.id, label: `${v.id} · ${v.locale}` })),
+          ...allVoices.map(v => ({ id: v.id, label: `${v.id} · ${v.locale}` })),
         ];
         const ensureOption = val =>
           voiceOptions.some(o => o.id === val) ? voiceOptions : [{ id: val, label: val }, ...voiceOptions];
@@ -1249,7 +1249,7 @@ window.__ModuleLoader__.load({
                   customVoices.map((cv, idx) => h('div', { key: cv.name + '-' + idx, className: 'voice-list-item' },
                     h('div', { className: 'voice-list-main' },
                       h('strong', null, cv.name),
-                      h('span', { className: 'voice-mono' }, [cv.voice, cv.persona, cv.rate, cv.pitch, cv.referenceAudio ? 'ref:' + cv.referenceAudio : ''].filter(Boolean).join(' · ') || 'default'),
+                      h('span', { className: 'voice-mono' }, [cv.voice, cv.persona, cv.rate, cv.pitch, cv.instructions ? 'style:' + cv.instructions : '', cv.referenceAudio ? 'ref:' + cv.referenceAudio : ''].filter(Boolean).join(' · ') || 'default'),
                     ),
                     h('div', { className: 'dsh-wb-toolbar' },
                       h(W.Button, {
@@ -1312,6 +1312,10 @@ window.__ModuleLoader__.load({
                     h(W.Input, { value: customDraft.rate, placeholder: '+0%', disabled: !writable || !!busy, onChange: e => setCustomDraft({ ...customDraft, rate: e.target.value }) }),
                     h(W.Input, { value: customDraft.pitch, placeholder: '+0Hz', disabled: !writable || !!busy, onChange: e => setCustomDraft({ ...customDraft, pitch: e.target.value }) }),
                   ),
+                ),
+                h('label', { className: 'voice-field' },
+                  h('span', null, vText('情绪 / 语气指令（可选）', 'Emotion / Style Instructions (optional)')),
+                  h(W.Input, { value: customDraft.instructions, placeholder: vText('如：低沉神秘、放慢语速', 'e.g. warm, calm storytelling'), disabled: !writable || !!busy, onChange: e => setCustomDraft({ ...customDraft, instructions: e.target.value }) }),
                 ),
                 h('label', { className: 'voice-field' },
                   h('span', null, vText('参考音频（零样本克隆）', 'Reference audio path')),

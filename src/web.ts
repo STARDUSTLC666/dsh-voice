@@ -45,6 +45,8 @@ import {
   normalizeAudioLoudness,
   offsetCues,
   parseSubtitleFile,
+  splitInlinePauses,
+  stripInlinePauses,
 } from './tts-text.js'
 import { filterVoices, isValidVoiceId, resolvePersona, VOICE_PERSONAS, VOICES } from './voices.js'
 import { resolveVoiceWish } from './wish.js'
@@ -194,12 +196,13 @@ function carrierGuard(request: Request): void {
   if (request.headers.get('x-dsh-voice') !== '1') {
     throw new VoiceStudioError('请从当前 DSH 设置页面操作。', 403, 'origin')
   }
+  const origin = request.headers.get('origin')
+  const desktop = origin === 'dsh-app://app'
   const site = request.headers.get('sec-fetch-site')
-  if (site && !['same-origin', 'none'].includes(site)) {
+  if (site && !['same-origin', 'none'].includes(site) && !desktop) {
     throw new VoiceStudioError('请从当前 DSH 设置页面操作。', 403, 'origin')
   }
-  const origin = request.headers.get('origin')
-  if (origin && origin !== 'dsh-app://app') {
+  if (origin && !desktop) {
     try {
       const source = new URL(origin)
       const expectedHost = request.headers.get('host') || new URL(request.url).host
@@ -608,6 +611,10 @@ export function createVoiceStudioBackend(
     pronunciations: readonly StudioPronunciationRule[],
     signal: AbortSignal,
   ): Promise<{ audio: Buffer; info: ReturnType<typeof inspectMp3Buffer>; cues: SubtitleCue[] }> => {
+    const cleanCueText = stripInlinePauses(segText)
+    const fallbackCues = (durationMs: number): SubtitleCue[] =>
+      cleanCueText !== '' ? [{ index: 1, startMs: 0, endMs: Math.max(1, durationMs), text: cleanCueText }] : []
+
     if (useEdge) {
       if (!isValidVoiceId(spec.voice)) {
         throw new VoiceStudioError('音色 ID 不合法：' + spec.voice, 400)
@@ -629,10 +636,7 @@ export function createVoiceStudioBackend(
           signal,
         )
         const info = inspectMp3Buffer(res.audio)
-        const cues: SubtitleCue[] =
-          res.cues.length > 0
-            ? res.cues
-            : [{ index: 1, startMs: 0, endMs: Math.max(1, info.durationMs), text: segText }]
+        const cues: SubtitleCue[] = res.cues.length > 0 ? res.cues : fallbackCues(info.durationMs)
         return { audio: res.audio, info, cues }
       }
 
@@ -652,7 +656,7 @@ export function createVoiceStudioBackend(
       return {
         audio,
         info,
-        cues: [{ index: 1, startMs: 0, endMs: Math.max(1, info.durationMs), text: segText }],
+        cues: fallbackCues(info.durationMs),
       }
     }
 
@@ -666,29 +670,83 @@ export function createVoiceStudioBackend(
     if (spec.voice.trim() === '' && !hasRefs) {
       throw new VoiceStudioError('音色 ID 不能为空。', 400)
     }
-    const spokenText = pronunciations.length > 0 ? applyPronunciationsPlain(segText, pronunciations) : segText
     const openaiFn = options.openaiTts ?? synthesizeOpenAiSpeech
-    const audio = await openaiFn(
-      cfg.ttsBaseUrl,
-      cfg.ttsApiKey,
-      {
-        text: spokenText,
-        voice: spec.voice,
-        model: cfg.ttsModel !== '' ? cfg.ttsModel : 'gpt-4o-mini-tts',
-        speed: rateToSpeed(spec.rate),
-        ...(spec.instructions ? { instructions: spec.instructions } : {}),
-        ...(hasRefs ? { references: spec.references } : {}),
+    const runOpenAiPiece = (rawPieceText: string) => {
+      const spokenText = pronunciations.length > 0 ? applyPronunciationsPlain(rawPieceText, pronunciations) : rawPieceText
+      return openaiFn(
+        cfg.ttsBaseUrl,
+        cfg.ttsApiKey,
+        {
+          text: spokenText,
+          voice: spec.voice,
+          model: cfg.ttsModel !== '' ? cfg.ttsModel : 'gpt-4o-mini-tts',
+          speed: rateToSpeed(spec.rate),
+          ...(spec.instructions ? { instructions: spec.instructions } : {}),
+          ...(hasRefs ? { references: spec.references } : {}),
+          signal,
+        },
+        getProxyFetch(cfg.proxyUrl) ?? globalThis.fetch,
+        cfg.timeoutMs,
         signal,
-      },
-      getProxyFetch(cfg.proxyUrl) ?? globalThis.fetch,
-      cfg.timeoutMs,
-      signal,
-    )
+      )
+    }
+
+    const pieces = splitInlinePauses(segText)
+    let audio: Buffer
+    const pieceCues: SubtitleCue[] = []
+    if (pieces.some((p) => p.kind === 'pause')) {
+      const textPieces = pieces.filter((p): p is { kind: 'text'; text: string } => p.kind === 'text' && p.text.trim() !== '')
+      if (textPieces.length === 0) {
+        const totalPauseMs = pieces.reduce((sum, p) => sum + (p.kind === 'pause' ? p.durationMs : 0), 0)
+        audio = createSilenceMp3(Math.max(50, totalPauseMs), 24000)
+      } else {
+        const synthesizedByIndex = new Map<number, Buffer>()
+        let detectedSampleRate = 24000
+        for (let i = 0; i < pieces.length; i++) {
+          const piece = pieces[i]
+          if (piece.kind !== 'text' || piece.text.trim() === '') continue
+          signal?.throwIfAborted()
+          const partAudio = await runOpenAiPiece(piece.text)
+          signal?.throwIfAborted()
+          const partInfo = inspectMp3Buffer(partAudio)
+          if (partInfo.frameCount > 0) detectedSampleRate = partInfo.sampleRate
+          synthesizedByIndex.set(i, partAudio)
+        }
+        const partBuffers: Buffer[] = []
+        let offsetMs = 0
+        for (let i = 0; i < pieces.length; i++) {
+          const piece = pieces[i]
+          if (piece.kind === 'pause') {
+            const sil = createSilenceMp3(piece.durationMs, detectedSampleRate)
+            if (sil.length > 0) {
+              partBuffers.push(sil)
+              offsetMs += inspectMp3Buffer(sil).durationMs
+            }
+          } else {
+            const partAudio = synthesizedByIndex.get(i)
+            if (partAudio !== undefined && partAudio.length > 0) {
+              partBuffers.push(partAudio)
+              const partDurationMs = Math.max(1, inspectMp3Buffer(partAudio).durationMs)
+              pieceCues.push({
+                index: pieceCues.length + 1,
+                startMs: offsetMs,
+                endMs: offsetMs + partDurationMs,
+                text: piece.text,
+              })
+              offsetMs += partDurationMs
+            }
+          }
+        }
+        audio = partBuffers.length === 1 ? partBuffers[0] : concatMp3Buffers(partBuffers)
+      }
+    } else {
+      audio = await runOpenAiPiece(segText)
+    }
     const info = inspectMp3Buffer(audio)
     return {
       audio,
       info,
-      cues: [{ index: 1, startMs: 0, endMs: Math.max(1, info.durationMs), text: segText }],
+      cues: pieceCues.length > 0 ? pieceCues : fallbackCues(info.durationMs),
     }
   }
 

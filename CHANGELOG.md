@@ -1,5 +1,11 @@
 # 更新记录
 
+## 0.11.1 (2026-11-23)
+
+- 完善 Voice Studio 桌面端兼容与行内停顿支持：`carrierGuard` 对 DSH Desktop `Origin: dsh-app://app` 豁免 `Sec-Fetch-Site`；非 Edge TTS（`openai`/`siliconflow`/`custom`）面板试听与多角色对话合成支持切分 `[pause:...]` 行内停顿并拼接静音帧，同时从回退字幕剥离停顿标记（附单元测试）。
+- 优化工作台音色选择、自定义角色与文档：移除试配台/对话编排器 `allVoices.slice(0, 45)` 硬截断并更新 `51+` 引导文案；自定义角色表单新增 `instructions` 情绪/语气指令输入框；替换 `src/host-config.ts` 中已淘汰的 `zh-CN-YunzeNeural` 示例为 `zh-CN-YunjianNeural`；同步更新 `docs/REFERENCE.{zh,en}.md` 至 v0.11.x 全量特性、语言切换链接与兼容更新说明。
+- Harden Voice Studio `carrierGuard` `Sec-Fetch-Site` handling for DSH Desktop `Origin: dsh-app://app`; handle inline `[pause:...]` tags (splitting text, splicing silence, stripping cues) on non-Edge Voice Studio synthesis and fallback cues (with unit tests); remove the 45-voice dropdown truncation (`51+` tour copy), add custom voice `instructions` input, replace the legacy `zh-CN-YunzeNeural` schema example, and refresh `docs/REFERENCE.{zh,en}.md`.
+
 ## 0.11.0 (2026-11-22)
 
 - 许愿式（Wish-Driven）聊天优先升级与场景配方引擎：`voice_tts` 新增 `scene` 高阶场景预设（`podcast`/`播客`、`short-video`/`短视频`、`audiobook`/`有声书`、`briefing`/`简报`、`story`/`故事`、`dubbing`/`配音`，未显式传参时自动套用场景默认人设、字幕粒度、响度均衡、Markdown 清理与智能输出命名），同时 `voice` / `persona` 与 `voice_preview` 全面支持自然语言风格与方言模糊解析（如 `"深夜"`、`"纪录片"`、`"粤语男声"`、`"东北话"`、`"双语女"`）。

@@ -2,11 +2,11 @@
 
 # dsh-voice
 
-[中文](../README.md)
+[中文](./REFERENCE.zh.md)
 
 ![dsh-voice whale girl plugin cover](https://raw.githubusercontent.com/STARDUSTLC666/dsh-voice/master/assets/cover-whale-girl.png)
 
-Generate speech or transcribe workspace recordings from DSH. Supports Edge TTS and OpenAI, Groq or custom compatible ASR; transcription uses your configured endpoint and output files avoid overwriting by default.
+Generate natural speech or transcribe workspace audio and video from DSH (v0.11.0). Ships zero-key Edge neural TTS, OpenAI / SiliconFlow / custom-compatible TTS & ASR, the 5-theme **Voice Studio** sidebar workbench, and the bundled `voice-workflow` skill with strict session-workspace isolation and non-destructive output defaults.
 
 [![npm](https://img.shields.io/npm/v/dsh-voice)](https://www.npmjs.com/package/dsh-voice) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-downloads.svg)](https://www.npmjs.com/package/dsh-voice) [![total downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-voice-total-downloads.svg)](https://www.npmjs.com/package/dsh-voice)
 
@@ -16,9 +16,12 @@ Feedback and contributions are welcome: report [issues](https://github.com/STARD
 
 ## What it does
 
-- Generate speech using the Edge online read-aloud service.
-- List voices and generate batch voice previews.
-- Transcribe audio using an OpenAI-compatible ASR endpoint.
+- **Wish-driven scenes & duration fitting**: 6 built-in scene presets (`podcast` / `short-video` / `audiobook` / `briefing` / `story` / `dubbing`), fuzzy style/dialect voice resolution, and automatic `targetDurationSec` duration fitting.
+- **Multi-engine TTS & voice cloning**: Zero-key Edge TTS out of the box (51 verified built-in + 300+ online voices, 10 personas), plus OpenAI / SiliconFlow / custom-compatible endpoints with emotion/style `instructions`, Kokoro voice blending, and zero-shot voice cloning (`referenceAudio` / `referenceText`).
+- **Interactive player, captions & mastering**: Zero-dependency `.player.html` follow-along player, word-boundary-safe tech pronunciation lexicon (11 built-in + custom `pronunciations`), vertical karaoke `.ass` (`\kf`) and `.srt`/`.vtt` subtitles, inline `[pause:500ms]` beats, native MP3 ID3v2 chapters, zero-drift `.srt`/`.vtt` dubbing, and BGM auto-ducking / `-16 LUFS` loudness normalization.
+- **Direct video container transcription**: `voice_stt` accepts `.mp4`/`.mkv`/`.mov`/`.avi` directly with automatic audio extraction, `diarize` speaker separation, `autoCompress` (>25 MB), and keyless loopback Whisper.
+- **Conversational preferences (`voice_prefs`) & 6 tools**: Registers `voice_tts`, `voice_stt`, `voice_list`, `voice_preview`, `voice_health`, and `voice_prefs` so users can persist non-credential creative defaults (default voice, rate, pitch, lexicon, custom aliases) directly from chat.
+- **5-theme Voice Studio workbench**: Sidebar workbench with 5 bright themes (`harness` / `cream` / `claude` / `pixel8bit` / `mint`), 8-second browser mic one-click clone creation, multi-speaker dialogue authoring, custom alias editing, and Workspace Library click-to-seek playback.
 
 ## Install
 
@@ -52,7 +55,7 @@ Detailed configuration, tool arguments and troubleshooting are in the [usage gui
 
 ## Plugin updates
 
-Requires DSH 0.2.2-rc.3 or newer. Update controls sit at the bottom of the existing workbench, or native plugin details for plugins without a workbench. Checks, release notes and preferences expand in place, with no separate update page or settings menu. Automatic checks are on by default; **automatic installation is off by default**. Only explicit opt-in permits compatible stable patches while idle with no unsaved changes. Preferences are independent, with per-plugin disable, deferral and ignore controls. No forced DSH restart or upgrade, and local-source installations stay unchanged. Suite components explain and operate on the whole Suite in the same footer.
+Requires DSH 0.2.2-rc.3 or newer. Update controls sit at the bottom of the existing workbench, or native plugin details for plugins without a workbench. Checks, release notes and preferences expand in place, with no separate update page or settings menu. Automatic checks are on by default; **automatic installation is off by default**. Only explicit opt-in permits compatible stable updates (minor and patch by default, with an optional patch-only scope) while idle with no unsaved changes. Preferences are independent, with per-plugin disable, deferral and ignore controls. No forced DSH restart or upgrade, and local-source installations stay unchanged. Suite components explain and operate on the whole Suite in the same footer.
 
 Older releases need one manual update in native plugin management to acquire these controls. Publishing to npm does not replace an existing user installation.
 

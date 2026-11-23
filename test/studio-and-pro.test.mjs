@@ -415,10 +415,13 @@ test('Pro 6: createVoiceStudioBackend 安全边界、密钥脱敏快照、previe
       ...(body ? { body: JSON.stringify(body) } : {}),
     })
 
-  // 拒绝缺少 X-DSH-VOICE: 1 或跨站 POST
+  // 拒绝缺少 X-DSH-VOICE: 1 或跨站 POST；放行 DSH Desktop Origin: dsh-app://app（含 Sec-Fetch-Site: cross-site）
   assert.equal((await backend.fetch(makeReq({ action: 'preview' }, { 'X-DSH-VOICE': '' }))).status, 403)
   assert.equal((await backend.fetch(makeReq({ action: 'preview' }, { Origin: 'https://evil.example' }))).status, 403)
   assert.equal((await backend.fetch(makeReq({ action: 'preview' }, { 'Sec-Fetch-Site': 'cross-site' }))).status, 403)
+  assert.equal((await backend.fetch(makeReq(null, { Origin: 'dsh-app://app', 'Sec-Fetch-Site': 'cross-site' }))).status, 200)
+  assert.equal((await backend.fetch(makeReq({ action: 'preview', text: '桌面端试听', voice: 'zh-CN-XiaoxiaoNeural' }, { Origin: 'dsh-app://app', 'Sec-Fetch-Site': 'cross-site' }))).status, 200)
+  assert.equal((await backend.fetch(makeReq({ action: 'preview' }, { Origin: 'dsh-app://app', 'Sec-Fetch-Site': 'cross-site', 'X-DSH-VOICE': '' }))).status, 403)
 
   // GET snapshot 不得泄漏明文密钥或代理凭据，仅返回布尔状态
   const snapRes = await backend.fetch(makeReq())
@@ -467,6 +470,91 @@ test('Pro 6: lib/client.js 已构建、通过 node --check、注册 dsh-voice.wo
     'lib/client.js must bundle 5 themes',
   )
   assert.ok(code.includes('dsh-updates') || code.includes('__stardustUpdatesGuard'), 'lib/client.js must include @stardustlc/dsh-updates footer integration')
+  assert.ok(!code.includes('allVoices.slice(0, 45)'), 'lib/client.js must not truncate voices at 45')
+  assert.ok(code.includes('51+'), 'lib/client.js tour copy should reflect 51+ built-in voices')
+  assert.ok(code.includes('customDraft.instructions'), 'lib/client.js must expose custom voice instructions input')
+})
+
+test('Pro 6b: Voice Studio 非 Edge 引擎与 Edge 回退字幕正确切分/剥离行内 [pause:...] 标签', async () => {
+  const spokenPieces = []
+  const openaiCfg = resolveConfig({
+    ttsEngine: 'openai',
+    ttsBaseUrl: 'https://api.example.test/v1',
+    ttsApiKey: 'test-tts-key',
+    ttsVoice: 'alloy',
+  })
+  const openaiBackend = createVoiceStudioBackend(() => openaiCfg, {
+    openaiTts: async (_baseUrl, _apiKey, opts) => {
+      spokenPieces.push(opts.text)
+      return createSilenceMp3(240, 24000)
+    },
+  })
+
+  const makePost = (body) =>
+    new Request('http://127.0.0.1:49000' + VOICE_STUDIO_API_ROUTE, {
+      method: 'POST',
+      headers: { 'X-DSH-VOICE': '1', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  // 非 Edge preview：将 "前半句 [pause:480ms] 后半句" 拆分为两段合成并插入 480ms 静音，且字幕不含 [pause:...]
+  const prevRes = await openaiBackend.fetch(
+    makePost({ action: 'preview', text: '前半句 [pause:480ms] 后半句', voice: 'alloy' }),
+  )
+  assert.equal(prevRes.status, 200)
+  const prevJson = await prevRes.json()
+  assert.deepEqual(spokenPieces, ['前半句', '后半句'])
+  const prevAudio = Buffer.from(prevJson.preview.audioBase64, 'base64')
+  assert.equal(inspectMp3Buffer(prevAudio).durationMs, 240 + 480 + 240)
+  assert.equal(prevJson.preview.cues.length, 2)
+  assert.equal(prevJson.preview.cues[0].text, '前半句')
+  assert.equal(prevJson.preview.cues[0].startMs, 0)
+  assert.equal(prevJson.preview.cues[0].endMs, 240)
+  assert.equal(prevJson.preview.cues[1].text, '后半句')
+  assert.equal(prevJson.preview.cues[1].startMs, 720)
+  assert.equal(prevJson.preview.cues[1].endMs, 960)
+  assert.ok(prevJson.preview.cues.every((c) => !c.text.includes('[pause')))
+
+  // 非 Edge synthesizeDialogue 也同样处理行内停顿，且不向引擎传入停顿标签
+  spokenPieces.length = 0
+  const dlgRes = await openaiBackend.fetch(
+    makePost({
+      action: 'synthesizeDialogue',
+      segments: [{ speaker: '旁白', voice: 'alloy', text: '第一拍 [pause:240ms] 第二拍' }],
+    }),
+  )
+  assert.equal(dlgRes.status, 200)
+  const dlgJson = await dlgRes.json()
+  assert.deepEqual(spokenPieces, ['第一拍', '第二拍'])
+  assert.equal(dlgJson.synthesis.durationMs, 240 + 240 + 240)
+  assert.equal(dlgJson.synthesis.cues.length, 2)
+  assert.equal(dlgJson.synthesis.cues[0].text, '[旁白] 第一拍')
+  assert.equal(dlgJson.synthesis.cues[1].text, '[旁白] 第二拍')
+  assert.ok(dlgJson.synthesis.cues.every((c) => !c.text.includes('[pause')))
+
+  // Edge 回退字幕分支（options.tts 与空 cues 的 options.ttsWithMeta）也必须剥离 [pause:...]
+  const edgeCfg = resolveConfig({ ttsEngine: 'edge', ttsVoice: 'zh-CN-XiaoxiaoNeural' })
+  const edgeFallbackBackend = createVoiceStudioBackend(() => edgeCfg, {
+    tts: async () => createSilenceMp3(480, 24000),
+  })
+  const edgeRes = await edgeFallbackBackend.fetch(
+    makePost({ action: 'preview', text: '甲 [pause:500ms] 乙', voice: 'zh-CN-XiaoxiaoNeural' }),
+  )
+  assert.equal(edgeRes.status, 200)
+  const edgeJson = await edgeRes.json()
+  assert.equal(edgeJson.preview.cues.length, 1)
+  assert.equal(edgeJson.preview.cues[0].text, '甲 乙')
+
+  const edgeMetaEmptyBackend = createVoiceStudioBackend(() => edgeCfg, {
+    ttsWithMeta: async () => ({ audio: createSilenceMp3(480, 24000), cues: [] }),
+  })
+  const edgeMetaRes = await edgeMetaEmptyBackend.fetch(
+    makePost({ action: 'preview', text: '丙 [pause:500ms] 丁', voice: 'zh-CN-XiaoxiaoNeural' }),
+  )
+  assert.equal(edgeMetaRes.status, 200)
+  const edgeMetaJson = await edgeMetaRes.json()
+  assert.equal(edgeMetaJson.preview.cues.length, 1)
+  assert.equal(edgeMetaJson.preview.cues[0].text, '丙 丁')
 })
 
 test('Pro 7: apply 动态注册 voice-workflow 运行时技能且 dispose 卸载干净', () => {
