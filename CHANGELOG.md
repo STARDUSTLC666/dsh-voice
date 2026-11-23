@@ -1,5 +1,10 @@
 # 更新记录
 
+## 0.11.2 (2026-11-23)
+
+- 修复首次引导的定位。音色、合成、麦克风、词典和成品库各步骤通过标签属性定位，避免 React 生成的 ID 让引导失去高亮或工作台崩溃。
+- Anchor Voice Studio's five onboarding steps to stable tab attributes so React-generated IDs cannot break the guide or blank the workbench.
+
 ## 0.11.1 (2026-11-23)
 
 - 完善 Voice Studio 桌面端兼容与行内停顿支持：`carrierGuard` 对 DSH Desktop `Origin: dsh-app://app` 豁免 `Sec-Fetch-Site`；非 Edge TTS（`openai`/`siliconflow`/`custom`）面板试听与多角色对话合成支持切分 `[pause:...]` 行内停顿并拼接静音帧，同时从回退字幕剥离停顿标记（附单元测试）。

@@ -348,32 +348,16 @@ function createWorkbenchUI(React, require) {
       function measure() {
         const scope = rootRef?.current || (typeof document !== 'undefined' ? document : null);
         if (!scope || typeof scope.querySelector !== 'function') return;
-        let target = null;
-        try {
-          // Guard against invalid CSS selectors (e.g. React 19 useId returns
-          // IDs like ':r19:' containing colons that are invalid in querySelector).
-          // If the selector is a bare '#<id>' with no combinators, use CSS.escape
-          // or fall back to getElementById for maximum safety.
-          const resolveSelector = sel => {
-            if (!sel) return null;
-            if (/^#[^\s>+~,[\]()]+$/.test(sel)) {
-              const rawId = sel.slice(1);
-              if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
-                return scope.querySelector('#' + CSS.escape(rawId));
-              }
-              // getElementById always works regardless of special characters
-              const byId = (scope.getElementById || document.getElementById)?.call(
-                scope === document ? document : document, rawId
-              );
-              return byId || null;
-            }
-            return scope.querySelector(sel);
-          };
-          target = resolveSelector(current.selector) || resolveSelector(current.fallback) || null;
-        } catch {
-          // Swallow any remaining querySelector SyntaxError — never crash the slot
-          target = null;
+        function query(selector) {
+          if (!selector) return null;
+          try {
+            return scope.querySelector(selector);
+          } catch {
+            // The guide can still use its fallback or show the card without a highlight.
+            return null;
+          }
         }
+        const target = query(current.selector) || query(current.fallback);
         setLayout?.(computeTourLayout(target, current.side, cardRef.current));
       }
       measure();
@@ -727,6 +711,7 @@ function createWorkbenchUI(React, require) {
             icon: item.icon,
             role: 'tab',
             id: baseId + '-tab-' + item.id,
+            'data-voice-tab': item.id,
             'aria-controls': baseId + '-panel',
             'aria-selected': active === item.id,
             tabIndex: active === item.id ? 0 : -1,

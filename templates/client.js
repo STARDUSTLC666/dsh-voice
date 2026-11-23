@@ -520,7 +520,7 @@ window.__ModuleLoader__.load({
       const voiceTourSteps = [
         {
           id: 'voices',
-          selector: '#' + tabsId + '-tab-voices',
+          selector: '[data-voice-tab="voices"]',
           side: 'bottom',
           title: vText('音色库与字幕跟读试听', 'Voices & Follow-Along Preview'),
           desc: vText(
@@ -530,7 +530,7 @@ window.__ModuleLoader__.load({
         },
         {
           id: 'studio',
-          selector: '#' + tabsId + '-tab-studio',
+          selector: '[data-voice-tab="studio"]',
           side: 'bottom',
           title: vText('可视化多角色台本与试配台', 'Multi-Speaker Dialogue Composer'),
           desc: vText(
@@ -542,7 +542,7 @@ window.__ModuleLoader__.load({
         },
         {
           id: 'mic',
-          selector: '#' + tabsId + '-tab-mic',
+          selector: '[data-voice-tab="mic"]',
           side: 'bottom',
           title: vText('8 秒录音一键生成克隆角色', '8-Second Mic Direct-to-Clone'),
           desc: vText(
@@ -552,7 +552,7 @@ window.__ModuleLoader__.load({
         },
         {
           id: 'lexicon',
-          selector: '#' + tabsId + '-tab-lexicon',
+          selector: '[data-voice-tab="lexicon"]',
           side: 'bottom',
           title: vText('发音词典与健康自检', 'Pronunciation Lexicon & Health'),
           desc: vText(
@@ -562,7 +562,7 @@ window.__ModuleLoader__.load({
         },
         {
           id: 'library',
-          selector: '#' + tabsId + '-tab-library',
+          selector: '[data-voice-tab="library"]',
           side: 'bottom',
           title: vText('工作区音频与同步字幕成品库', 'Workspace Audio & Subtitle Library'),
           desc: vText(

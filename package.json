@@ -1,6 +1,6 @@
 {
   "name": "dsh-voice",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "DeepSeek Harness 语音工作台插件（许愿式聊天优先 + 5 套主题工作台：原生清透 / 米白纸感 / Claude 暖书卷 / 8-Bit 像素 / 晴空薄荷）：零密钥 Edge TTS 场景化一键合成、自然语言选声、目标时长校准、HTML5 交互播放器、对话持久化记偏好、声音克隆、卡拉 OK 字幕、播客 BGM 自动闪避及多引擎音视频转写。欢迎提交 issues 和 PR。",
   "type": "module",
   "main": "lib/index.js",
