@@ -1928,11 +1928,13 @@ const VOICE_WORKBENCH_CSS = `
 .voice-workbench .voice-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 10px 12px;
 }
 
 .voice-workbench .voice-field {
   display: grid;
+  align-content: start;
   gap: 5px;
   min-width: 0;
 }
@@ -1950,6 +1952,7 @@ const VOICE_WORKBENCH_CSS = `
 .voice-workbench .voice-pair-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  align-items: start;
   gap: 8px;
 }
 

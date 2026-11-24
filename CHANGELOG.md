@@ -1,5 +1,10 @@
 # 更新记录
 
+## 0.11.3 (2026-11-25)
+
+- 修复 Voice Studio 工作台双列表单对齐：为 `.voice-form-grid` 与 `.voice-pair-row` 补充 `align-items: start`、为 `.voice-field` 补充 `align-content: start`，避免下拉选择器与输入框同行时纵向错位。
+- Fix Voice Studio two-column form alignment by setting `align-items: start` on `.voice-form-grid` / `.voice-pair-row` and `align-content: start` on `.voice-field`.
+
 ## 0.11.2 (2026-11-23)
 
 - 修复首次引导的定位。音色、合成、麦克风、词典和成品库各步骤通过标签属性定位，避免 React 生成的 ID 让引导失去高亮或工作台崩溃。
