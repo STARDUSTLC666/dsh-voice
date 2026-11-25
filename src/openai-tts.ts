@@ -19,6 +19,8 @@ export type OpenAiTtsFetch = typeof fetch & { FormData?: typeof FormData }
 
 const uploadedVoiceUriCache = new Map<string, string>()
 const inFlightVoiceUploads = new Map<string, Promise<string>>()
+const MAX_TTS_AUDIO_RESPONSE_BYTES = 25 * 1024 * 1024
+const MAX_TTS_ERROR_RESPONSE_BYTES = 4 * 1024
 
 /** 重置 SiliconFlow 参考音频 URI 内存缓存（测试专用）。 */
 export function resetUploadedVoiceCacheForTest(): void {
@@ -127,7 +129,7 @@ export async function uploadSiliconFlowVoice(
     if (!response.ok) {
       let body = ''
       try {
-        body = (await raceAbort(response.text(), requestSignal)).slice(0, 300)
+        body = (await readBoundedResponseBody(response, MAX_TTS_ERROR_RESPONSE_BYTES, requestSignal, 'truncate')).toString('utf8').slice(0, 300)
       } catch (error) {
         throwIfAborted(signal)
         if (timeoutSignal.aborted) throw new Error('SiliconFlow 音色上传响应读取超时。')
@@ -201,6 +203,53 @@ function raceAbort<T>(value: T | PromiseLike<T>, signal: AbortSignal | undefined
       (error) => { signal.removeEventListener('abort', onAbort); rejectPromise(error) },
     )
   })
+}
+
+function contentLengthExceeds(response: Response, maxBytes: number): boolean {
+  const value = response.headers.get('content-length')?.trim()
+  if (!value || !/^\d+$/.test(value)) return false
+  try { return BigInt(value) > BigInt(maxBytes) } catch { return false }
+}
+
+async function readBoundedResponseBody(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+  overflow: 'reject' | 'truncate',
+): Promise<Buffer> {
+  const body = response.body
+  if (overflow === 'reject' && contentLengthExceeds(response, maxBytes)) {
+    try { await body?.cancel() } catch { /* ignore */ }
+    throw new Error('TTS 音频响应超过 25 MiB 上限。')
+  }
+  if (body === null) return Buffer.alloc(0)
+
+  const reader = body.getReader()
+  const chunks: Buffer[] = []
+  let total = 0
+  let complete = false
+  try {
+    while (true) {
+      const { done, value } = await raceAbort(reader.read(), signal)
+      if (done) { complete = true; break }
+      const remaining = maxBytes - total
+      if (value.byteLength > remaining && overflow === 'reject') {
+        throw new Error('TTS 音频响应超过 25 MiB 上限。')
+      }
+      const take = Math.min(value.byteLength, remaining)
+      if (take > 0) {
+        chunks.push(Buffer.from(value.subarray(0, take)))
+        total += take
+      }
+      if (take < value.byteLength || overflow === 'truncate' && total === maxBytes) break
+    }
+    return Buffer.concat(chunks, total)
+  } finally {
+    if (!complete) {
+      try { await reader.cancel() } catch { /* ignore */ }
+    }
+    try { reader.releaseLock() } catch { /* reader may still be settling after abort */ }
+  }
 }
 
 /**
@@ -344,7 +393,7 @@ export async function synthesizeOpenAiSpeech(
   if (!response.ok) {
     let body = ''
     try {
-      body = (await raceAbort(response.text(), requestSignal)).slice(0, 300)
+      body = (await readBoundedResponseBody(response, MAX_TTS_ERROR_RESPONSE_BYTES, requestSignal, 'truncate')).toString('utf8').slice(0, 300)
     } catch (error) {
       throwIfAborted(abortSignal)
       if (timeoutSignal.aborted) throw new Error('TTS 响应读取超时，请重试。')
@@ -353,16 +402,15 @@ export async function synthesizeOpenAiSpeech(
     throw new Error('TTS 失败：HTTP ' + response.status + '。' + body)
   }
 
-  let arrayBuffer: ArrayBuffer
+  let audio: Buffer
   try {
-    arrayBuffer = await raceAbort(response.arrayBuffer(), requestSignal)
+    audio = await readBoundedResponseBody(response, MAX_TTS_AUDIO_RESPONSE_BYTES, requestSignal, 'reject')
   } catch (error) {
     throwIfAborted(abortSignal)
     if (timeoutSignal.aborted) throw new Error('TTS 响应读取超时，请重试。')
     throw error
   }
 
-  const audio = Buffer.from(arrayBuffer)
   if (audio.length === 0) {
     throw new Error('TTS 合成结果为空。')
   }

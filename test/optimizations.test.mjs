@@ -552,7 +552,7 @@ test('P2 synthesizeOpenAiSpeech 与 voice_tts 非 edge 引擎路由', async (t) 
     { text: 'Hello world', voice: 'alloy', model: 'gpt-4o-mini-tts', speed: 1.2 },
     async (url, init) => {
       captured = { url, init, body: JSON.parse(init.body) }
-      return { ok: true, status: 200, arrayBuffer: async () => Buffer.from('OPENAI_MP3') }
+      return new Response(Buffer.from('OPENAI_MP3'))
     },
     5000,
   )

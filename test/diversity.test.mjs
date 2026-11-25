@@ -210,7 +210,7 @@ test('Layer 3: synthesizeOpenAiSpeech handles CosyVoice2 <|endofprompt|>, gpt-4o
   const requests = []
   const fakeFetch = async (url, init) => {
     requests.push({ url: String(url), body: JSON.parse(init.body) })
-    return { ok: true, status: 200, arrayBuffer: async () => Buffer.from('FAKE_MP3') }
+    return new Response(Buffer.from('FAKE_MP3'))
   }
 
   // CosyVoice2 prepends instructions + <|endofprompt|> without top-level instructions field

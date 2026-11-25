@@ -1,5 +1,11 @@
 # 更新记录
 
+## 0.11.4 (2026-11-25)
+
+- TTS 音频采用流式读取并限制为 25 MiB，错误响应仅读取 4 KiB 前缀，清理未完成的读取器。
+- Stream TTS audio with a 25 MiB limit and bound error responses to a 4 KiB prefix, cancelling unfinished readers.
+
+
 ## 0.11.3 (2026-11-25)
 
 - 修复 Voice Studio 工作台双列表单对齐：为 `.voice-form-grid` 与 `.voice-pair-row` 补充 `align-items: start`、为 `.voice-field` 补充 `align-content: start`，避免下拉选择器与输入框同行时纵向错位。
