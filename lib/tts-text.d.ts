@@ -5,7 +5,8 @@ import type { SubtitleCue } from './edge-tts.js';
  */
 export declare function cleanMarkdownForSpeech(text: string): string;
 /**
- * 按段落 → 句子 → 子句 → 空白 → 硬切分五级回退策略将长文本切分为不超过 maxChars 的非空段。
+ * 按段落、句子、子句和空白分段，最后按完整 Unicode 码点切分。
+ * maxChars 按 UTF-16 长度计算；上限为 1 时，一个代理对会单独成段。
  */
 export declare function splitTextIntoChunks(text: string, maxChars?: number): string[];
 /**

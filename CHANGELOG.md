@@ -1,5 +1,10 @@
 # 更新记录
 
+## Unreleased
+
+- 修复无空格长文在分段边界拆开生僻汉字和 emoji、导致朗读文本损坏的问题。
+- Keep supplementary Unicode characters intact at hard splits during long-form speech synthesis.
+
 ## 0.11.4 (2026-11-25)
 
 - TTS 音频采用流式读取并限制为 25 MiB，错误响应仅读取 4 KiB 前缀，清理未完成的读取器。

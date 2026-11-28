@@ -277,6 +277,15 @@ test('P0 voice_health：ttsReady/sttReady 拆分、scope 过滤、语速/音调�
 
 // ---------- P1: Long-text, inputFile, Markdown, Segments, Subtitles, Oversize Audio ----------
 
+test('长文硬切分保留完整的补充平面汉字和 emoji', () => {
+  const text = '字'.repeat(2799) + '𠮷😀' + '文'.repeat(2800)
+  const chunks = splitTextIntoChunks(text)
+  assert.ok(chunks.every(chunk => chunk.length <= 2800 && chunk.isWellFormed()))
+  assert.equal(chunks.join(''), text)
+  assert.deepEqual(splitTextIntoChunks('A𠮷B', 1), ['A', '𠮷', 'B'])
+  assert.deepEqual(splitTextIntoChunks(text, NaN), chunks)
+})
+
 test('P1 tts-text：cleanMarkdownForSpeech / splitTextIntoChunks / stripId3v2 / concatMp3Buffers / createSilenceMp3', () => {
   const cleaned = cleanMarkdownForSpeech('# 标题\n\n**加粗** [链接](https://example.com) ![配图](a.png) `code` https://bare.url\n```ts\nconst x = 1\n```\n> 引用')
   assert.ok(cleaned.includes('标题'))
