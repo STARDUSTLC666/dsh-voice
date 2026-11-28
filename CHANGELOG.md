@@ -1,6 +1,6 @@
 # 更新记录
 
-## Unreleased
+## 0.11.5 (2026-11-28)
 
 - 修复无空格长文在分段边界拆开生僻汉字和 emoji、导致朗读文本损坏的问题。
 - Keep supplementary Unicode characters intact at hard splits during long-form speech synthesis.
